@@ -1,0 +1,6 @@
+﻿streamlit
+sqlmodel
+pydantic
+openai
+python-dotenv
+

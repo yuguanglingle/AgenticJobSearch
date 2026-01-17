@@ -1,0 +1,22 @@
+﻿John Doe
+Senior Software Engineer
+
+Summary
+- 10+ years building scalable web services and data platforms.
+- Led teams of 4-8 engineers and shipped high-impact features.
+
+Experience
+Acme Corp - Staff Software Engineer (2019-2024)
+- Led redesign of core payments platform, reducing latency by 40%.
+- Built event-driven microservices on AWS (SQS, SNS, Lambda).
+- Mentored 6 engineers and drove adoption of Terraform.
+
+Globex - Senior Software Engineer (2015-2019)
+- Built customer analytics pipeline processing 2TB/day.
+- Improved search relevance by 15% using ML ranking models.
+
+Skills
+Python, Go, SQL, AWS, Terraform, Kafka, Postgres, Docker, Kubernetes
+
+Education
+B.S. Computer Science, State University
