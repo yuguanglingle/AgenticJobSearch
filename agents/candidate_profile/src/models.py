@@ -17,12 +17,6 @@ class CandidateProfileRequest(BaseModel):
     resume_text: str
     preferences: CandidatePreferences = Field(default_factory=CandidatePreferences)
 
-    @validator("resume_text")
-    def resume_text_min_length(cls, v: str) -> str:
-        if not v or len(v.strip()) < 200:
-            raise ValueError("Resume text must be at least 200 characters.")
-        return v
-
 
 class ExperienceHighlight(BaseModel):
     company: str

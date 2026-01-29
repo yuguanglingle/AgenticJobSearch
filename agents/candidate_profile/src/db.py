@@ -2,7 +2,9 @@
 import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from sqlmodel import SQLModel, Field, create_engine, Session, select
+from sqlmodel import SQLModel, Field, Session, select
+
+from db.utils import get_engine, init_db
 
 
 class Candidate(SQLModel, table=True):
@@ -40,19 +42,13 @@ class AgentRun(SQLModel, table=True):
     created_at: str
 
 
-def get_engine() -> Any:
+def get_db_path() -> str:
+    """Get database path for candidate profile."""
     db_path = os.getenv("DB_PATH")
     if not db_path:
-        base_dir = Path(__file__).resolve().parents[1]
+        base_dir = Path(__file__).resolve().parents[2]
         db_path = str(base_dir / "data" / "app.db")
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    return create_engine(f"sqlite:///{db_path}")
-
-
-def init_db() -> Any:
-    engine = get_engine()
-    SQLModel.metadata.create_all(engine)
-    return engine
+    return db_path
 
 
 def save_candidate(
@@ -66,7 +62,8 @@ def save_candidate(
     updated_at: str,
     preferences: Dict[str, Any],
 ) -> None:
-    engine = init_db()
+    db_path = get_db_path()
+    engine = init_db(db_path)
     with Session(engine) as session:
         existing = session.get(Candidate, candidate_id)
         if existing:
@@ -125,7 +122,8 @@ def save_agent_run(
     raw_llm_response: Optional[str],
     created_at: str,
 ) -> None:
-    engine = init_db()
+    db_path = get_db_path()
+    engine = init_db(db_path)
     with Session(engine) as session:
         session.add(
             AgentRun(
@@ -143,19 +141,22 @@ def save_agent_run(
 
 
 def list_candidates() -> List[Candidate]:
-    engine = init_db()
+    db_path = get_db_path()
+    engine = init_db(db_path)
     with Session(engine) as session:
         stmt = select(Candidate).order_by(Candidate.updated_at.desc())
         return list(session.exec(stmt))
 
 
 def get_candidate(candidate_id: str) -> Optional[Candidate]:
-    engine = init_db()
+    db_path = get_db_path()
+    engine = init_db(db_path)
     with Session(engine) as session:
         return session.get(Candidate, candidate_id)
 
 
 def get_candidate_preferences(candidate_id: str) -> Optional[CandidatePreferences]:
-    engine = init_db()
+    db_path = get_db_path()
+    engine = init_db(db_path)
     with Session(engine) as session:
         return session.get(CandidatePreferences, candidate_id)

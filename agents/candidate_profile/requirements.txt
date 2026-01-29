@@ -1,6 +1,5 @@
-﻿streamlit
+streamlit
 sqlmodel
 pydantic
-openai
+openai>=2.15.0
 python-dotenv
-

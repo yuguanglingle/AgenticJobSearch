@@ -1,6 +1,6 @@
 ﻿import json
 import uuid
-from typing import Any, Dict, Tuple
+from typing import Optional, Tuple, Dict, Any
 from pydantic import ValidationError
 
 from src.models import (
@@ -29,7 +29,9 @@ def _normalize_envelope(envelope: CandidateProfileEnvelope) -> CandidateProfileE
     return envelope
 
 
-def generate_candidate_profile(input: CandidateProfileRequest) -> Tuple[CandidateProfileEnvelope, str]:
+def generate_candidate_profile(
+    input: CandidateProfileRequest,
+) -> Tuple[CandidateProfileEnvelope, str, Optional[Dict[str, Any]]]:
     candidate_id = input.candidate_id or str(uuid.uuid4())
     run_id = str(uuid.uuid4())
     timestamp = now_utc_iso()
@@ -45,6 +47,7 @@ def generate_candidate_profile(input: CandidateProfileRequest) -> Tuple[Candidat
     client = LLMClient()
     raw_response = client.generate(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
     usage_summary = client.usage_summary()
+    usage_raw = client.last_usage
 
     def parse_response(payload: str) -> CandidateProfileEnvelope:
         data = json.loads(payload)
@@ -55,6 +58,7 @@ def generate_candidate_profile(input: CandidateProfileRequest) -> Tuple[Candidat
     except (json.JSONDecodeError, ValidationError):
         fixed = client.fix_json(system_prompt=SYSTEM_PROMPT, bad_json=raw_response)
         usage_summary = client.usage_summary()
+        usage_raw = client.last_usage
         try:
             envelope = parse_response(fixed)
             raw_response = fixed
@@ -89,6 +93,7 @@ def generate_candidate_profile(input: CandidateProfileRequest) -> Tuple[Candidat
                 "system_prompt": SYSTEM_PROMPT,
                 "user_prompt": user_prompt,
                 "prompt_version": PROMPT_VERSION,
+                "usage": client.last_usage,
             },
             ensure_ascii=True,
         ),
@@ -97,5 +102,4 @@ def generate_candidate_profile(input: CandidateProfileRequest) -> Tuple[Candidat
         created_at=timestamp,
     )
 
-    return envelope, usage_summary
-
+    return envelope, usage_summary, usage_raw
