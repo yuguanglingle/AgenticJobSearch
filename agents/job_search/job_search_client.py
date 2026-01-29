@@ -1,15 +1,36 @@
 import hashlib
 import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 from uuid import uuid4
 
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-from db import save_retrieval_batch
+BASE_DIR = Path(__file__).resolve().parent
+AGENTS_DIR = BASE_DIR.parent
+if str(AGENTS_DIR) not in sys.path:
+    sys.path.insert(0, str(AGENTS_DIR))
+
+_job_search_db = None
+
+
+def _get_db_module():
+    global _job_search_db
+    if _job_search_db is None:
+        spec = spec_from_file_location("job_search_db", str(BASE_DIR / "db.py"))
+        module = module_from_spec(spec)
+        if spec and spec.loader:
+            spec.loader.exec_module(module)
+        else:
+            raise RuntimeError("Failed to load job_search db module.")
+        _job_search_db = module
+    return _job_search_db
 
 load_dotenv()
 
@@ -353,7 +374,8 @@ class JobSearchClient:
             batch_data: Dictionary containing retrieval_batch metadata, jobs list,
                        and stats from the run() method.
         """
-        save_retrieval_batch(batch_data)
+        db_module = _get_db_module()
+        db_module.save_retrieval_batch(batch_data)
 
 
 def main() -> None:

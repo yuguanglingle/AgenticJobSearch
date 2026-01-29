@@ -156,12 +156,16 @@ def save_retrieval_batch(batch_data: Dict[str, Any]) -> None:
         # Save individual jobs
         jobs = batch_data.get("jobs", [])
         for job_data in jobs:
+            employment_type = job_data.get("employment_type")
+            if not employment_type and job_data.get("employment_statuses"):
+                employment_type = job_data.get("employment_statuses", [None])[0]
             job = Job(
                 id=str(uuid4()),
                 batch_id=batch_id,
                 source=job_data.get("source", ""),
-                source_job_id=job_data.get("id"),
-                job_title=job_data.get("job_title"),
+                source_job_id=job_data.get("id") or job_data.get("source_job_id"),
+                job_id=job_data.get("job_id"),
+                job_title=job_data.get("job_title") or job_data.get("title"),
                 normalized_title=job_data.get("normalized_title"),
                 description=job_data.get("description"),
                 company=job_data.get("company"),
@@ -170,7 +174,11 @@ def save_retrieval_batch(batch_data: Dict[str, Any]) -> None:
                 url=job_data.get("url"),
                 final_url=job_data.get("final_url"),
                 source_url=job_data.get("source_url"),
-                canonical_url=job_data.get("final_url") or job_data.get("url") or job_data.get("source_url") or "",
+                canonical_url=job_data.get("canonical_url")
+                or job_data.get("final_url")
+                or job_data.get("url")
+                or job_data.get("source_url")
+                or "",
                 location=job_data.get("location"),
                 short_location=job_data.get("short_location"),
                 long_location=job_data.get("long_location"),
@@ -185,9 +193,9 @@ def save_retrieval_batch(batch_data: Dict[str, Any]) -> None:
                 cities=json.dumps(job_data.get("cities")) if job_data.get("cities") else None,
                 continents=json.dumps(job_data.get("continents")) if job_data.get("continents") else None,
                 locations_json=json.dumps(job_data.get("locations")) if job_data.get("locations") else None,
-                date_posted=job_data.get("date_posted"),
-                discovered_at=job_data.get("discovered_at"),
-                date_reposted=job_data.get("date_reposted"),
+                date_posted=job_data.get("date_posted") or job_data.get("posted_at"),
+                discovered_at=job_data.get("discovered_at") or job_data.get("date_found"),
+                date_reposted=job_data.get("date_reposted") or job_data.get("updated_at"),
                 reposted=job_data.get("reposted"),
                 salary_string=job_data.get("salary_string"),
                 min_annual_salary=job_data.get("min_annual_salary"),
@@ -199,7 +207,7 @@ def save_retrieval_batch(batch_data: Dict[str, Any]) -> None:
                 remote=job_data.get("remote"),
                 hybrid=job_data.get("hybrid"),
                 employment_statuses=json.dumps(job_data.get("employment_statuses")) if job_data.get("employment_statuses") else None,
-                employment_type=job_data.get("employment_statuses", [None])[0] if job_data.get("employment_statuses") else None,
+                employment_type=employment_type,
                 seniority=job_data.get("seniority"),
                 easy_apply=job_data.get("easy_apply"),
                 technology_slugs=json.dumps(job_data.get("technology_slugs")) if job_data.get("technology_slugs") else None,
@@ -211,6 +219,11 @@ def save_retrieval_batch(batch_data: Dict[str, Any]) -> None:
                 dedupe_key_strong=job_data.get("dedupe_key_strong"),
                 dedupe_key_soft=job_data.get("dedupe_key_soft"),
                 retrieval_score=job_data.get("retrieval_score", 0.0),
+                description_text=job_data.get("description_text"),
+                description_hash=job_data.get("description_hash"),
+                posted_at=job_data.get("posted_at"),
+                updated_at=job_data.get("updated_at"),
+                date_found=job_data.get("date_found"),
                 created_at=batch_meta.get("finished_at", ""),
             )
             session.add(job)
@@ -251,13 +264,13 @@ def get_retrieval_batch(batch_id: str) -> Optional[Dict[str, Any]]:
                 "source_job_id": job.source_job_id,
                 "canonical_url": job.canonical_url,
                 "company": job.company,
-                "title": job.title,
+                "title": job.job_title,
                 "location": job.location,
                 "employment_type": job.employment_type,
-                "posted_at": job.posted_at,
-                "updated_at": job.updated_at,
-                "date_found": job.date_found,
-                "description_text": job.description_text,
+                "posted_at": job.date_posted or job.posted_at,
+                "updated_at": job.date_reposted or job.updated_at,
+                "date_found": job.discovered_at or job.date_found,
+                "description_text": job.description_text or job.description,
                 "description_hash": job.description_hash,
                 "dedupe_key_strong": job.dedupe_key_strong,
                 "dedupe_key_soft": job.dedupe_key_soft,
@@ -304,11 +317,11 @@ def get_recent_jobs(limit: int = 100) -> list[Dict[str, Any]]:
                 "job_id": job.job_id,
                 "source": job.source,
                 "company": job.company,
-                "title": job.title,
+                "title": job.job_title,
                 "location": job.location,
                 "canonical_url": job.canonical_url,
-                "posted_at": job.posted_at,
-                "date_found": job.date_found,
+                "posted_at": job.date_posted or job.posted_at,
+                "date_found": job.discovered_at or job.date_found,
             }
             for job in jobs
         ]
