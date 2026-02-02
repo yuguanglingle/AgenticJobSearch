@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TEST_DIRS = [
     ROOT / "agents" / "candidate_profile" / "tests",
     ROOT / "agents" / "job_search" / "tests",
+    ROOT / "agents" / "job_match" / "tests",
 ]
 
 
