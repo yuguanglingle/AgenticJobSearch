@@ -30,6 +30,14 @@ def apply_fit_result(
     score: int,
     decision: str,
     bucket: str,
+    *,
+    subscores: Optional[dict] = None,
+    top_reasons: Optional[list[str]] = None,
+    gaps: Optional[list[str]] = None,
+    dealbreakers_triggered: Optional[list[str]] = None,
+    model: Optional[str] = None,
+    raw_response: Optional[str] = None,
+    scored_at: Optional[str] = None,
 ) -> job_match_db.JobOpportunity:
     """Persist a fit result and mark opportunity as SCREENED.
 
@@ -39,28 +47,39 @@ def apply_fit_result(
         score: Overall score 0-100.
         decision: Decision label.
         bucket: Screen bucket label.
+        subscores: Optional subscores dict.
+        top_reasons: Optional list of reasons.
+        gaps: Optional list of gaps.
+        dealbreakers_triggered: Optional list of dealbreakers.
+        model: Optional model name.
+        raw_response: Optional raw LLM response.
+        scored_at: Optional ISO timestamp.
 
     Returns:
         Updated JobOpportunity record.
     """
     opportunity = job_match_db.get_or_create_opportunity(candidate_id, job_id)
+    if JobState(opportunity.state) == JobState.CLOSED:
+        raise ValueError("Cannot score a closed opportunity.")
+
     job_match_db.save_job_fit_evaluation(
         candidate_id=candidate_id,
         job_id=job_id,
         overall_score=score,
         decision=decision,
-        subscores={"manual": True},
-        top_reasons=[],
-        gaps=[],
-        dealbreakers_triggered=[],
-        model=None,
-        raw_response=None,
+        subscores=subscores or {"manual": True},
+        top_reasons=top_reasons or [],
+        gaps=gaps or [],
+        dealbreakers_triggered=dealbreakers_triggered or [],
+        model=model,
+        raw_response=raw_response,
     )
     return job_match_db.set_opportunity_scored(
         opportunity.id,
         score=score,
         decision=decision,
         screen_bucket=bucket,
+        scored_at=scored_at,
     )
 
 
@@ -131,3 +150,22 @@ def mark_applied(opportunity_id: str, applied_at: Optional[str] = None) -> job_m
                 applied_at=applied_at,
             )
     return job_match_db.update_opportunity_state(opportunity_id, JobState.APPLIED)
+
+
+def mark_skipped_recently_applied(
+    candidate_id: str,
+    job_id: str,
+    reason: str = "applied_within_7_days",
+) -> job_match_db.JobOpportunity:
+    """Mark an opportunity as skipped due to a recent application.
+
+    Args:
+        candidate_id: Candidate primary key.
+        job_id: Job primary key.
+        reason: Skip reason string.
+
+    Returns:
+        Updated JobOpportunity record.
+    """
+    opportunity = job_match_db.get_or_create_opportunity(candidate_id, job_id)
+    return job_match_db.mark_skipped_recently_applied(opportunity.id, reason=reason)

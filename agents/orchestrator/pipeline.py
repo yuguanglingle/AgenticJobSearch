@@ -10,11 +10,12 @@ from sqlmodel import Session, select
 
 from candidate_profile.src import db as candidate_db
 from job_match import db as job_match_db
-from job_match.agent import evaluate_and_persist
+from job_match.agent import JobFitAgent
 from job_match.pre_ranker import compute_retrieval_score
 from job_match.state_machine import JobState
 from job_search import db as job_search_db
 from job_search.job_search_client import JobSearchClient
+from orchestrator import state as orchestrator_state
 
 
 LLM_SCORE_THRESHOLD = 0.25
@@ -138,6 +139,22 @@ def _candidate_keywords(profile: dict, preferences: dict) -> list[str]:
     return [str(item) for item in keywords if item]
 
 
+def _bucket_from_score(score: int) -> str:
+    """Map score to screen bucket.
+
+    Args:
+        score: Overall score 0-100.
+
+    Returns:
+        Screen bucket string.
+    """
+    if score >= 75:
+        return "recommended"
+    if score >= 55:
+        return "borderline"
+    return "low_match"
+
+
 def _pre_rank_discovered(candidate_id: str, job_ids: list[str]) -> list[PreRankedOpportunity]:
     """Score DISCOVERED opportunities with the heuristic pre-ranker.
 
@@ -217,18 +234,26 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
     num_scored = 0
     num_pre_ranked = 0
 
-    # 3) Ensure opportunities exist for each job.
+    # 3) Ensure opportunities exist and filter eligible DISCOVERED items.
+    eligible_job_ids: list[str] = []
     for job_id in job_ids:
-        job_match_db.get_or_create_opportunity(candidate_id, job_id)
+        opp = orchestrator_state.get_or_create_opportunity(candidate_id, job_id)
+        if opp.is_skipped_recently_applied:
+            continue
+        if opp.state != JobState.DISCOVERED.value:
+            continue
+        eligible_job_ids.append(job_id)
 
-    # 4) Pre-rank only DISCOVERED opportunities.
-    pre_ranked = _pre_rank_discovered(candidate_id, job_ids)
+    # 4) Pre-rank only eligible DISCOVERED opportunities.
+    pre_ranked = _pre_rank_discovered(candidate_id, eligible_job_ids)
     num_pre_ranked = len(pre_ranked)
 
     # 5) Prepare LLM client if available and reuse DB engine.
     llm_client = _load_llm_client()
     db_path = job_match_db.get_db_path()
     job_engine = job_search_db.init_db(db_path)
+    agent_with_llm = JobFitAgent(llm_client=llm_client)
+    agent_no_llm = JobFitAgent(llm_client=None)
 
     # 6) Score the top-N pre-ranked opportunities.
     for item in pre_ranked[: max(0, limit_to_score)]:
@@ -244,15 +269,27 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
             dedupe_key_soft=job_record.dedupe_key_soft,
             description_hash=job_record.description_hash,
         ):
-            job_match_db.mark_skipped_recently_applied(item.opportunity_id)
+            orchestrator_state.mark_skipped_recently_applied(candidate_id, item.job_id)
             num_skipped_recent_apply += 1
             continue
 
         # Only send to LLM when the heuristic score passes threshold.
         if item.score < LLM_SCORE_THRESHOLD:
-            evaluate_and_persist(candidate_id, item.job_id, llm_client=None)
+            result = agent_no_llm.evaluate(candidate_id, item.job_id)
         else:
-            evaluate_and_persist(candidate_id, item.job_id, llm_client=llm_client)
+            result = agent_with_llm.evaluate(candidate_id, item.job_id)
+        orchestrator_state.apply_fit_result(
+            candidate_id,
+            item.job_id,
+            result.overall_score,
+            result.decision,
+            _bucket_from_score(result.overall_score),
+            subscores=result.subscores,
+            top_reasons=result.top_reasons,
+            gaps=result.gaps,
+            dealbreakers_triggered=result.dealbreakers_triggered,
+            model=getattr(llm_client, "model", None) if item.score >= LLM_SCORE_THRESHOLD else None,
+        )
         num_scored += 1
 
     # 7) Return a compact stats payload for logging/UI.
@@ -268,3 +305,98 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
         "limit_to_score": limit_to_score,
     }
     return stats
+
+
+def run_daily_from_batch(
+    *,
+    candidate_id: str,
+    batch_data: dict,
+    llm_client: Optional[Any] = None,
+    limit_to_score: int = 50,
+) -> dict:
+    """Run the pipeline using a pre-fetched batch (useful for tests).
+
+    Args:
+        candidate_id: Candidate primary key.
+        batch_data: Retrieval batch payload with jobs.
+        llm_client: Optional LLM client override.
+        limit_to_score: Max number of pre-ranked jobs to score.
+
+    Returns:
+        Dict of pipeline stats (batch ids, counts, scoring totals).
+    """
+    _get_candidate_or_raise(candidate_id)
+
+    job_ids = job_search_db.save_retrieval_batch(batch_data)
+    batch_id = batch_data.get("retrieval_batch", {}).get("batch_id")
+    batch_meta = job_search_db.get_retrieval_batch(batch_id) if batch_id else None
+
+    num_skipped_recent_apply = 0
+    num_scored = 0
+    num_pre_ranked = 0
+
+    eligible_job_ids: list[str] = []
+    for job_id in job_ids:
+        opp = orchestrator_state.get_or_create_opportunity(candidate_id, job_id)
+        if opp.is_skipped_recently_applied:
+            continue
+        if opp.state != JobState.DISCOVERED.value:
+            continue
+        eligible_job_ids.append(job_id)
+
+    pre_ranked = _pre_rank_discovered(candidate_id, eligible_job_ids)
+    num_pre_ranked = len(pre_ranked)
+
+    db_path = job_match_db.get_db_path()
+    job_engine = job_search_db.init_db(db_path)
+    effective_llm_client = llm_client or _load_llm_client()
+    agent_with_llm = JobFitAgent(llm_client=effective_llm_client)
+    agent_no_llm = JobFitAgent(llm_client=None)
+
+    for item in pre_ranked[: max(0, limit_to_score)]:
+        with Session(job_engine) as session:
+            job_record = session.get(job_search_db.Job, item.job_id)
+        if not job_record:
+            continue
+        if job_match_db.should_skip_recently_applied(
+            candidate_id,
+            dedupe_key_strong=job_record.dedupe_key_strong,
+            canonical_url=job_record.canonical_url,
+            dedupe_key_soft=job_record.dedupe_key_soft,
+            description_hash=job_record.description_hash,
+        ):
+            orchestrator_state.mark_skipped_recently_applied(candidate_id, item.job_id)
+            num_skipped_recent_apply += 1
+            continue
+
+        if item.score < LLM_SCORE_THRESHOLD:
+            result = agent_no_llm.evaluate(candidate_id, item.job_id)
+        else:
+            result = agent_with_llm.evaluate(candidate_id, item.job_id)
+        orchestrator_state.apply_fit_result(
+            candidate_id,
+            item.job_id,
+            result.overall_score,
+            result.decision,
+            _bucket_from_score(result.overall_score),
+            subscores=result.subscores,
+            top_reasons=result.top_reasons,
+            gaps=result.gaps,
+            dealbreakers_triggered=result.dealbreakers_triggered,
+            model=getattr(effective_llm_client, "model", None)
+            if item.score >= LLM_SCORE_THRESHOLD
+            else None,
+        )
+        num_scored += 1
+
+    return {
+        "candidate_id": candidate_id,
+        "batch_id": batch_id,
+        "num_new_jobs": batch_meta["stats"]["jobs_new"] if batch_meta else 0,
+        "num_updated_jobs": batch_meta["stats"]["jobs_updated"] if batch_meta else 0,
+        "num_deduped_jobs": batch_meta["stats"]["jobs_deduped"] if batch_meta else 0,
+        "num_pre_ranked": num_pre_ranked,
+        "num_scored": num_scored,
+        "num_skipped_recent_apply": num_skipped_recent_apply,
+        "limit_to_score": limit_to_score,
+    }

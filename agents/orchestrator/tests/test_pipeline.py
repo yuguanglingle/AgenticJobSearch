@@ -13,6 +13,7 @@ if str(AGENTS_DIR) not in sys.path:
 
 from candidate_profile.src import db as candidate_db
 from job_match import db as job_match_db
+from job_match.agent import evaluate_and_persist
 from job_match.pre_ranker import compute_retrieval_score
 from job_search import db as job_search_db
 from orchestrator import pipeline
@@ -156,20 +157,29 @@ class OrchestratorPipelineTests(unittest.TestCase):
         def _assert_discovered_then_pre_rank(*args, **kwargs):
             job_ids = args[1]
             for job_id in job_ids:
-                opp = job_match_db.get_or_create_opportunity(candidate_id, job_id)
+                opp = orchestrator_state.get_or_create_opportunity(candidate_id, job_id)
                 self.assertEqual(opp.state, "DISCOVERED")
             return original_pre_rank(*args, **kwargs)
 
         with patch.object(pipeline, "JobSearchClient", FakeClient):
             with patch.object(pipeline, "_pre_rank_discovered", _assert_discovered_then_pre_rank):
-                stats = pipeline.run_daily(
-                    candidate_id=candidate_id,
-                    provider_config={"providers": []},
-                    limit_to_score=10,
-                )
+                calls = []
+                original_apply = orchestrator_state.apply_fit_result
+
+                def _spy_apply(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    return original_apply(*args, **kwargs)
+
+                with patch.object(orchestrator_state, "apply_fit_result", side_effect=_spy_apply):
+                    stats = pipeline.run_daily(
+                        candidate_id=candidate_id,
+                        provider_config={"providers": []},
+                        limit_to_score=10,
+                    )
 
         self.assertEqual(stats["num_pre_ranked"], 2)
         self.assertEqual(stats["num_scored"], 2)
+        self.assertEqual(len(calls), 2)
 
         db_path = job_search_db.get_db_path()
         engine = job_search_db.init_db(db_path)
@@ -177,7 +187,7 @@ class OrchestratorPipelineTests(unittest.TestCase):
             jobs = session.exec(job_search_db.select(job_search_db.Job)).all()
             self.assertEqual(len(jobs), 2)
             for job in jobs:
-                opp = job_match_db.get_or_create_opportunity(candidate_id, job.id)
+                opp = orchestrator_state.get_or_create_opportunity(candidate_id, job.id)
                 self.assertEqual(opp.state, "SCREENED")
 
     def test_pre_ranker_gating_low_overlap(self) -> None:
@@ -213,7 +223,7 @@ class OrchestratorPipelineTests(unittest.TestCase):
         job_ids = job_search_db.save_retrieval_batch(batch)
         job_id = job_ids[0]
 
-        job_match_db.get_or_create_opportunity(candidate_id, job_id)
+        orchestrator_state.get_or_create_opportunity(candidate_id, job_id)
         job = _load_job(job_id)
         retrieval_score, _ = compute_retrieval_score(
             job_title=job.job_title,
@@ -234,11 +244,44 @@ class OrchestratorPipelineTests(unittest.TestCase):
             def generate(self, *args, **kwargs):
                 raise AssertionError("LLM should not be called.")
 
-        agent = pipeline.evaluate_and_persist
-        result = agent(candidate_id, job_id, llm_client=RaiseOnCallLLM())
+        result = evaluate_and_persist(candidate_id, job_id, llm_client=RaiseOnCallLLM())
         self.assertFalse(result.used_llm)
         expected_score = int(round(retrieval_score * 100))
         self.assertEqual(result.overall_score, expected_score)
+
+    def test_pipeline_skips_previously_processed_jobs(self) -> None:
+        """Pipeline should not score skipped or already screened jobs.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
+        candidate_id = self._seed_candidate()
+        batch_data = self._batch_payload()
+        job_ids = job_search_db.save_retrieval_batch(batch_data)
+        skipped_job_id = job_ids[0]
+        screened_job_id = job_ids[1]
+
+        orchestrator_state.mark_skipped_recently_applied(candidate_id, skipped_job_id)
+        orchestrator_state.apply_fit_result(
+            candidate_id,
+            screened_job_id,
+            score=10,
+            decision="no",
+            bucket="low_match",
+        )
+
+        with patch("job_match.agent.JobFitAgent.evaluate") as mock_evaluate:
+            stats = pipeline.run_daily_from_batch(
+                candidate_id=candidate_id,
+                batch_data=batch_data,
+                limit_to_score=10,
+            )
+
+        mock_evaluate.assert_not_called()
+        self.assertEqual(stats["num_scored"], 0)
 
     def test_user_actions_state_transitions(self) -> None:
         """Validate SCREENED->APPROVED/CLOSED and APPROVED->APPLIED transitions.
@@ -253,12 +296,13 @@ class OrchestratorPipelineTests(unittest.TestCase):
         batch = self._batch_payload()
         job_ids = job_search_db.save_retrieval_batch(batch)
         job_id = job_ids[0]
-        opportunity = job_match_db.get_or_create_opportunity(candidate_id, job_id)
-        job_match_db.set_opportunity_scored(
-            opportunity.id,
+        opportunity = orchestrator_state.get_or_create_opportunity(candidate_id, job_id)
+        orchestrator_state.apply_fit_result(
+            candidate_id,
+            job_id,
             score=80,
             decision="strong_yes",
-            screen_bucket="recommended",
+            bucket="recommended",
         )
 
         approved = orchestrator_state.approve(opportunity.id)
@@ -268,12 +312,13 @@ class OrchestratorPipelineTests(unittest.TestCase):
         self.assertEqual(applied.state, "APPLIED")
 
         other_job_id = job_ids[1]
-        other_opp = job_match_db.get_or_create_opportunity(candidate_id, other_job_id)
-        job_match_db.set_opportunity_scored(
-            other_opp.id,
+        other_opp = orchestrator_state.get_or_create_opportunity(candidate_id, other_job_id)
+        orchestrator_state.apply_fit_result(
+            candidate_id,
+            other_job_id,
             score=20,
             decision="no",
-            screen_bucket="low_match",
+            bucket="low_match",
         )
         closed = orchestrator_state.close(other_opp.id, reason="user_closed")
         self.assertEqual(closed.state, "CLOSED")

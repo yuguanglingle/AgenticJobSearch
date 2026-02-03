@@ -386,22 +386,18 @@ def evaluate_and_persist(candidate_id: str, job_id: str, llm_client: Optional[An
     if JobState(opportunity.state) == JobState.CLOSED:
         raise ValueError("Cannot score a closed opportunity.")
     result = agent.evaluate(candidate_id, job_id)
-    job_match_db.save_job_fit_evaluation(
-        candidate_id=candidate_id,
-        job_id=job_id,
-        overall_score=result.overall_score,
-        decision=result.decision,
+    from orchestrator import state as orchestrator_state
+
+    orchestrator_state.apply_fit_result(
+        candidate_id,
+        job_id,
+        result.overall_score,
+        result.decision,
+        _bucket_from_score(result.overall_score),
         subscores=result.subscores,
         top_reasons=result.top_reasons,
         gaps=result.gaps,
         dealbreakers_triggered=result.dealbreakers_triggered,
         model=getattr(llm_client, "model", None) if llm_client else None,
-        raw_response=None,
-    )
-    job_match_db.set_opportunity_scored(
-        opportunity.id,
-        score=result.overall_score,
-        decision=result.decision,
-        screen_bucket=_bucket_from_score(result.overall_score),
     )
     return result
