@@ -24,12 +24,28 @@ from candidate_profile.src.llm_client import LLMClient
 
 class JobMatchLLMIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
+        """Create a temporary SQLite database for isolation.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         self._old_db_path = os.environ.get("DB_PATH")
         self._tmpdir = tempfile.TemporaryDirectory()
         self._db_path = str(Path(self._tmpdir.name) / "test.db")
         os.environ["DB_PATH"] = self._db_path
 
     def tearDown(self) -> None:
+        """Restore DB_PATH and clean up temp files.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         if self._old_db_path is None:
             os.environ.pop("DB_PATH", None)
         else:
@@ -40,10 +56,18 @@ class JobMatchLLMIntegrationTests(unittest.TestCase):
             pass
 
     @unittest.skipIf(
-        not os.getenv("OPENAI_API_KEY"),
-        "OPENAI_API_KEY not set; skipping live LLM integration test.",
+        not (os.getenv("RUN_LLM_TESTS") == "1" and os.getenv("OPENAI_API_KEY")),
+        "Set RUN_LLM_TESTS=1 and OPENAI_API_KEY to run live LLM integration test.",
     )
     def test_live_llm_job_fit(self) -> None:
+        """Run a live LLM evaluation if OPENAI_API_KEY is set.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         candidate_id = "cand-llm-1"
         candidate_db.save_candidate(
             candidate_id=candidate_id,
@@ -91,6 +115,17 @@ class JobMatchLLMIntegrationTests(unittest.TestCase):
 
 
 def _seed_job(*, title: str, location: str, description: str, source_job_id: str) -> str:
+    """Seed a job record for tests.
+
+    Args:
+        title: Job title.
+        location: Job location.
+        description: Job description.
+        source_job_id: Source job id.
+
+    Returns:
+        Job id string.
+    """
     batch = {
         "retrieval_batch": {
             "batch_id": "batch-llm-1",
@@ -115,6 +150,14 @@ def _seed_job(*, title: str, location: str, description: str, source_job_id: str
 
 
 def json_dump(payload: dict) -> str:
+    """Serialize a dict to JSON.
+
+    Args:
+        payload: Dict to serialize.
+
+    Returns:
+        JSON string.
+    """
     import json
 
     return json.dumps(payload)

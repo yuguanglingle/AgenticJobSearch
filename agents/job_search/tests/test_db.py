@@ -3,7 +3,6 @@ import os
 import sys
 import tempfile
 import unittest
-from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -11,12 +10,7 @@ AGENTS_DIR = BASE_DIR.parent
 if str(AGENTS_DIR) not in sys.path:
     sys.path.insert(0, str(AGENTS_DIR))
 
-spec = spec_from_file_location("job_search_db", str(BASE_DIR / "db.py"))
-job_search_db = module_from_spec(spec)
-if spec and spec.loader:
-    spec.loader.exec_module(job_search_db)
-else:
-    raise RuntimeError("Failed to load job_search db module.")
+from job_search import db as job_search_db
 
 save_retrieval_batch = job_search_db.save_retrieval_batch
 get_retrieval_batch = job_search_db.get_retrieval_batch
@@ -25,14 +19,28 @@ get_recent_jobs = job_search_db.get_recent_jobs
 
 class JobSearchDbTests(unittest.TestCase):
     def setUp(self) -> None:
-        """Create a temporary SQLite database for isolation."""
+        """Create a temporary SQLite database for isolation.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         self._old_db_path = os.environ.get("DB_PATH")
         self._tmpdir = tempfile.TemporaryDirectory()
         self._db_path = str(Path(self._tmpdir.name) / "test.db")
         os.environ["DB_PATH"] = self._db_path
 
     def tearDown(self) -> None:
-        """Restore DB_PATH and clean up temp files."""
+        """Restore DB_PATH and clean up temp files.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         if self._old_db_path is None:
             os.environ.pop("DB_PATH", None)
         else:
@@ -43,7 +51,14 @@ class JobSearchDbTests(unittest.TestCase):
             pass
 
     def test_save_and_get_retrieval_batch(self) -> None:
-        """Verify batch persistence and recent job retrieval."""
+        """Verify batch persistence and recent job retrieval.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         batch = {
             "retrieval_batch": {
                 "batch_id": "batch-1",

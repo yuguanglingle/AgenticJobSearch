@@ -1,4 +1,6 @@
-﻿import json
+"""Candidate profile generation agent."""
+
+import json
 import uuid
 from typing import Optional, Tuple, Dict, Any
 from pydantic import ValidationError
@@ -17,6 +19,14 @@ AGENT_NAME = "CandidateProfileAgent"
 
 
 def _normalize_envelope(envelope: CandidateProfileEnvelope) -> CandidateProfileEnvelope:
+    """Normalize and cap fields in the candidate profile envelope.
+
+    Args:
+        envelope: CandidateProfileEnvelope instance.
+
+    Returns:
+        Normalized CandidateProfileEnvelope.
+    """
     profile = envelope.result.candidate_profile
     profile.core_skills = unique_sorted(profile.core_skills, 25)
     profile.domains = unique_sorted(profile.domains, 10)
@@ -32,6 +42,14 @@ def _normalize_envelope(envelope: CandidateProfileEnvelope) -> CandidateProfileE
 def generate_candidate_profile(
     input: CandidateProfileRequest,
 ) -> Tuple[CandidateProfileEnvelope, str, Optional[Dict[str, Any]]]:
+    """Generate candidate profile via LLM and persist results.
+
+    Args:
+        input: CandidateProfileRequest payload.
+
+    Returns:
+        Tuple of (CandidateProfileEnvelope, usage_summary, usage_raw).
+    """
     candidate_id = input.candidate_id or str(uuid.uuid4())
     run_id = str(uuid.uuid4())
     timestamp = now_utc_iso()

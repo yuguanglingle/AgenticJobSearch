@@ -17,14 +17,28 @@ from src import db
 
 class CandidateDbTests(unittest.TestCase):
     def setUp(self) -> None:
-        """Create a temporary SQLite database for isolation."""
+        """Create a temporary SQLite database for isolation.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         self._old_db_path = os.environ.get("DB_PATH")
         self._tmpdir = tempfile.TemporaryDirectory()
         self._db_path = str(Path(self._tmpdir.name) / "test.db")
         os.environ["DB_PATH"] = self._db_path
 
     def tearDown(self) -> None:
-        """Restore DB_PATH and clean up temp files."""
+        """Restore DB_PATH and clean up temp files.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         if self._old_db_path is None:
             os.environ.pop("DB_PATH", None)
         else:
@@ -35,7 +49,14 @@ class CandidateDbTests(unittest.TestCase):
             pass
 
     def test_save_and_get_candidate(self) -> None:
-        """Verify candidate and preferences persist and can be read back."""
+        """Verify candidate and preferences persist and can be read back.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         db.save_candidate(
             candidate_id="cand-1",
             resume_raw="Resume",

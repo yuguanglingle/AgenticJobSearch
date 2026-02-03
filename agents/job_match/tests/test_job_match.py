@@ -20,14 +20,39 @@ from job_search import db as job_search_db
 
 class RaiseOnCallLLM:
     def __init__(self) -> None:
+        """Initialize stub LLM client.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         self.model = "test-model"
 
     def generate(self, *args, **kwargs):
+        """Raise to ensure LLM is not called.
+
+        Args:
+            *args: Positional args.
+            **kwargs: Keyword args.
+
+        Returns:
+            None.
+        """
         raise AssertionError("LLM should not be called.")
 
 
 class JobMatchTests(unittest.TestCase):
     def setUp(self) -> None:
+        """Create a temporary SQLite database for isolation.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         self._old_db_path = os.environ.get("DB_PATH")
         self._old_openai_key = os.environ.get("OPENAI_API_KEY")
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -35,6 +60,14 @@ class JobMatchTests(unittest.TestCase):
         os.environ["DB_PATH"] = self._db_path
 
     def tearDown(self) -> None:
+        """Restore environment variables and clean up temp files.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         if self._old_db_path is None:
             os.environ.pop("DB_PATH", None)
         else:
@@ -49,6 +82,14 @@ class JobMatchTests(unittest.TestCase):
             pass
 
     def _seed_candidate(self) -> str:
+        """Seed a candidate for tests.
+
+        Args:
+            None.
+
+        Returns:
+            Candidate id string.
+        """
         candidate_id = "cand-1"
         candidate_db.save_candidate(
             candidate_id=candidate_id,
@@ -81,6 +122,17 @@ class JobMatchTests(unittest.TestCase):
         return candidate_id
 
     def _seed_job(self, *, title: str, location: str, description: str, source_job_id: str) -> str:
+        """Seed a job record for tests.
+
+        Args:
+            title: Job title.
+            location: Job location.
+            description: Job description.
+            source_job_id: Source job id.
+
+        Returns:
+            Job id string.
+        """
         batch = {
             "retrieval_batch": {
                 "batch_id": "batch-1",
@@ -104,6 +156,14 @@ class JobMatchTests(unittest.TestCase):
         return job_ids[0]
 
     def test_pre_ranker_prevents_openai_call(self) -> None:
+        """Ensure pre-ranker avoids LLM calls for low scores.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         candidate_id = self._seed_candidate()
         job_id = self._seed_job(
             title="Sales Representative",
@@ -118,6 +178,14 @@ class JobMatchTests(unittest.TestCase):
         self.assertEqual(result.decision, "no")
 
     def test_fallback_without_openai_key(self) -> None:
+        """Ensure fallback path works without OPENAI_API_KEY.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         candidate_id = self._seed_candidate()
         job_id = self._seed_job(
             title="Software Engineer",
@@ -132,6 +200,14 @@ class JobMatchTests(unittest.TestCase):
         self.assertIn(result.decision, {"strong_yes", "maybe", "no"})
 
     def test_skip_applied_within_7_days(self) -> None:
+        """Ensure recently-applied jobs are skipped.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         candidate_id = self._seed_candidate()
         job_id = self._seed_job(
             title="Data Engineer",
@@ -163,6 +239,14 @@ class JobMatchTests(unittest.TestCase):
         self.assertEqual(updated.skip_reason, "applied_within_7_days")
 
     def test_state_transitions(self) -> None:
+        """Verify allowed state transitions.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         candidate_id = self._seed_candidate()
         job_id = self._seed_job(
             title="Analyst",
@@ -185,6 +269,14 @@ class JobMatchTests(unittest.TestCase):
 
 
 def _load_job(job_id: str):
+    """Load a job record by id.
+
+    Args:
+        job_id: Job primary key.
+
+    Returns:
+        Job record or None.
+    """
     db_path = job_search_db.get_db_path()
     engine = job_search_db.init_db(db_path)
     with job_search_db.Session(engine) as session:
@@ -192,6 +284,14 @@ def _load_job(job_id: str):
 
 
 def json_dump(payload: dict) -> str:
+    """Serialize a dict to JSON.
+
+    Args:
+        payload: Dict to serialize.
+
+    Returns:
+        JSON string.
+    """
     import json
 
     return json.dumps(payload)

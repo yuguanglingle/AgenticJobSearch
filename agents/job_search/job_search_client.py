@@ -51,22 +51,50 @@ DEFAULT_CONFIG = {
 
 
 def iso_now() -> str:
-    """Return the current UTC time as an ISO-8601 string."""
+    """Return the current UTC time as an ISO-8601 string.
+
+    Args:
+        None.
+
+    Returns:
+        ISO-8601 timestamp string.
+    """
     return datetime.now(timezone.utc).isoformat()
 
 
 def clean_text(text: str) -> str:
-    """Normalize whitespace to a single-space, trimmed string."""
+    """Normalize whitespace to a single-space, trimmed string.
+
+    Args:
+        text: Input text.
+
+    Returns:
+        Cleaned text.
+    """
     return " ".join(text.split())
 
 
 def sha256_text(text: str) -> str:
-    """Compute a sha256 hex digest for the given text."""
+    """Compute a sha256 hex digest for the given text.
+
+    Args:
+        text: Input text.
+
+    Returns:
+        Hex digest string.
+    """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def fetch_description(url: str) -> str | None:
-    """Fetch and extract visible text from a job detail page."""
+    """Fetch and extract visible text from a job detail page.
+
+    Args:
+        url: Job detail URL.
+
+    Returns:
+        Extracted text or None.
+    """
     try:
         resp = requests.get(
             url,
@@ -83,7 +111,14 @@ def fetch_description(url: str) -> str | None:
 
 
 def resolve_description(job: dict) -> str | None:
-    """Return job description text from URL fetch or API field fallback."""
+    """Return job description text from URL fetch or API field fallback.
+
+    Args:
+        job: Provider job payload.
+
+    Returns:
+        Description text or None.
+    """
     for candidate in [job.get("final_url"), job.get("source_url")]:
         if not candidate:
             continue
@@ -96,7 +131,14 @@ def resolve_description(job: dict) -> str | None:
 
 
 def build_payload() -> dict:
-    """Build the default TheirStack search payload."""
+    """Build the default TheirStack search payload.
+
+    Args:
+        None.
+
+    Returns:
+        Payload dict.
+    """
     return {
         "order_by": [
             {"desc": True, "field": "date_posted"},
@@ -212,7 +254,15 @@ def build_payload() -> dict:
 
 
 def call_theirstack(api_key: str, payload: dict) -> dict:
-    """Call the TheirStack search endpoint and return JSON data."""
+    """Call the TheirStack search endpoint and return JSON data.
+
+    Args:
+        api_key: TheirStack API key.
+        payload: Search payload dict.
+
+    Returns:
+        Response JSON dict.
+    """
     response = requests.post(
         API_URL,
         headers={
@@ -255,7 +305,15 @@ def call_theirstack(api_key: str, payload: dict) -> dict:
 
 
 def map_job(job: dict, source: str) -> dict:
-    """Map a provider job payload into the normalized job schema."""
+    """Map a provider job payload into the normalized job schema.
+
+    Args:
+        job: Provider job payload.
+        source: Provider name.
+
+    Returns:
+        Normalized job dict.
+    """
     source_job_id = str(job.get("id")) if job.get("id") is not None else None
     canonical_url = job.get("final_url") or job.get("url") or job.get("source_url") or ""
     description_text = resolve_description(job)
@@ -294,22 +352,58 @@ def map_job(job: dict, source: str) -> dict:
 
 @dataclass
 class ProviderResult:
-    """Container for provider responses."""
+    """Container for provider responses.
+
+    Args:
+        provider_name: Provider identifier.
+        jobs: List of normalized job dicts.
+
+    Returns:
+        None.
+    """
     provider_name: str
     jobs: list[dict]
 
 
 class ProviderClient:
-    """Base interface for provider clients."""
+    """Base interface for provider clients.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
     def fetch(self) -> ProviderResult:
-        """Fetch jobs from a provider and return a ProviderResult."""
+        """Fetch jobs from a provider and return a ProviderResult.
+
+        Args:
+            None.
+
+        Returns:
+            ProviderResult.
+        """
         raise NotImplementedError
 
 
 class TheirstackClient(ProviderClient):
-    """Client for the TheirStack job search API."""
+    """Client for the TheirStack job search API.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
     def __init__(self, provider_config: dict):
-        """Initialize client with provider config and environment API key."""
+        """Initialize client with provider config and environment API key.
+
+        Args:
+            provider_config: Provider configuration dict.
+
+        Returns:
+            None.
+        """
         self.provider_config = provider_config
         api_key_env = provider_config.get("api_key_env", "THEIRSTACK_API_KEY")
         self.api_key = os.getenv(api_key_env)
@@ -317,7 +411,14 @@ class TheirstackClient(ProviderClient):
             raise RuntimeError(f"Missing {api_key_env} in environment.")
 
     def fetch(self) -> ProviderResult:
-        """Execute the search and map results to the normalized schema."""
+        """Execute the search and map results to the normalized schema.
+
+        Args:
+            None.
+
+        Returns:
+            ProviderResult with mapped jobs.
+        """
         payload = build_payload()
         payload_overrides = self.provider_config.get("payload_overrides") or {}
         payload.update(payload_overrides)
@@ -328,9 +429,23 @@ class TheirstackClient(ProviderClient):
 
 
 class JobSearchClient:
-    """Orchestrates multiple provider clients from config."""
+    """Orchestrates multiple provider clients from config.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
     def __init__(self, config: dict):
-        """Initialize clients based on the provided config."""
+        """Initialize clients based on the provided config.
+
+        Args:
+            config: Provider configuration dict.
+
+        Returns:
+            None.
+        """
         self.config = config
         self.providers = []
         for provider in config.get("providers", []):
@@ -344,7 +459,14 @@ class JobSearchClient:
                 raise ValueError(f"Unsupported provider type: {provider_type}")
 
     def run(self) -> dict:
-        """Run all providers and return the batch output payload."""
+        """Run all providers and return the batch output payload.
+
+        Args:
+            None.
+
+        Returns:
+            Batch payload dict with retrieval metadata and jobs.
+        """
         started_at = iso_now()
         jobs = []
         for provider in self.providers:
@@ -373,13 +495,23 @@ class JobSearchClient:
         Args:
             batch_data: Dictionary containing retrieval_batch metadata, jobs list,
                        and stats from the run() method.
+
+        Returns:
+            None.
         """
         db_module = _get_db_module()
         db_module.save_retrieval_batch(batch_data)
 
 
 def main() -> None:
-    """CLI entrypoint that runs the job search client with defaults."""
+    """CLI entrypoint that runs the job search client with defaults.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
     client = JobSearchClient(DEFAULT_CONFIG)
     output = client.run()
     print(json.dumps(output, indent=2))

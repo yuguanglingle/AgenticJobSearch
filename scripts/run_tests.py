@@ -1,3 +1,5 @@
+"""Run unit tests across agent submodules."""
+
 from pathlib import Path
 import subprocess
 import sys
@@ -8,10 +10,19 @@ TEST_DIRS = [
     ROOT / "agents" / "candidate_profile" / "tests",
     ROOT / "agents" / "job_search" / "tests",
     ROOT / "agents" / "job_match" / "tests",
+    ROOT / "agents" / "orchestrator" / "tests",
 ]
 
 
 def run_tests() -> int:
+    """Run unittest discovery for each test directory.
+
+    Args:
+        None.
+
+    Returns:
+        Exit code (0 if all tests pass).
+    """
     exit_code = 0
     for test_dir in TEST_DIRS:
         if not test_dir.exists():

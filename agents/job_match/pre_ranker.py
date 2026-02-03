@@ -3,6 +3,14 @@ from typing import Iterable, Optional
 
 
 def normalize_terms(values: Iterable[str]) -> list[str]:
+    """Normalize text terms to lowercase alphanumeric tokens.
+
+    Args:
+        values: Iterable of raw strings.
+
+    Returns:
+        List of normalized strings.
+    """
     normalized = []
     for value in values:
         cleaned = re.sub(r"[^a-z0-9\s]", " ", value.lower())
@@ -13,6 +21,15 @@ def normalize_terms(values: Iterable[str]) -> list[str]:
 
 
 def text_contains_any(text: str, terms: Iterable[str]) -> bool:
+    """Check whether any term appears in text.
+
+    Args:
+        text: Lower/upper case text to search.
+        terms: Iterable of normalized terms.
+
+    Returns:
+        True if any term is found, otherwise False.
+    """
     for term in terms:
         if term and term in text:
             return True
@@ -20,6 +37,15 @@ def text_contains_any(text: str, terms: Iterable[str]) -> bool:
 
 
 def count_overlaps(text: str, terms: Iterable[str]) -> int:
+    """Count term overlaps in text.
+
+    Args:
+        text: Lower/upper case text to search.
+        terms: Iterable of normalized terms.
+
+    Returns:
+        Count of matching terms.
+    """
     hits = 0
     for term in terms:
         if term and term in text:
@@ -35,6 +61,18 @@ def location_match(
     preferred_locations: list[str],
     remote_preference: Optional[str],
 ) -> bool:
+    """Determine whether a job location matches user preference.
+
+    Args:
+        job_location: Job location string.
+        job_remote: Job remote flag.
+        job_hybrid: Job hybrid flag.
+        preferred_locations: Preferred locations list.
+        remote_preference: One of remote/hybrid/onsite/None.
+
+    Returns:
+        True if location matches, otherwise False.
+    """
     location_text = (job_location or "").lower()
     preferred_locations = normalize_terms(preferred_locations)
     if preferred_locations and text_contains_any(location_text, preferred_locations):
@@ -60,6 +98,22 @@ def compute_retrieval_score(
     preferred_locations: list[str],
     remote_preference: Optional[str],
 ) -> tuple[float, dict]:
+    """Compute heuristic retrieval score for a job.
+
+    Args:
+        job_title: Job title.
+        job_description: Job description text.
+        job_location: Job location.
+        job_remote: Job remote flag.
+        job_hybrid: Job hybrid flag.
+        keywords: Candidate keywords.
+        dealbreakers: Candidate dealbreakers.
+        preferred_locations: Preferred locations list.
+        remote_preference: Candidate remote preference.
+
+    Returns:
+        Tuple of (score 0.0-1.0, reasons dict).
+    """
     text = " ".join(filter(None, [job_title or "", job_description or ""])).lower()
     normalized_keywords = normalize_terms(keywords)
     normalized_dealbreakers = normalize_terms(dealbreakers)

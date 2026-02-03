@@ -53,10 +53,26 @@ class Application(SQLModel, table=True):
 
 
 def utc_now() -> str:
+    """Return current UTC timestamp in ISO-8601.
+
+    Args:
+        None.
+
+    Returns:
+        ISO-8601 timestamp string.
+    """
     return datetime.now(timezone.utc).isoformat()
 
 
 def get_db_path() -> str:
+    """Resolve shared database path for job_match.
+
+    Args:
+        None.
+
+    Returns:
+        Database path string.
+    """
     db_path = os.getenv("DB_PATH")
     if not db_path:
         base_dir = Path(__file__).resolve().parents[2]
@@ -65,6 +81,15 @@ def get_db_path() -> str:
 
 
 def get_or_create_opportunity(candidate_id: str, job_id: str) -> JobOpportunity:
+    """Get or create a JobOpportunity for candidate/job.
+
+    Args:
+        candidate_id: Candidate primary key.
+        job_id: Job primary key.
+
+    Returns:
+        JobOpportunity record.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
@@ -98,6 +123,15 @@ def get_or_create_opportunity(candidate_id: str, job_id: str) -> JobOpportunity:
 
 
 def update_opportunity_state(opportunity_id: str, new_state: JobState) -> JobOpportunity:
+    """Update opportunity state with transition validation.
+
+    Args:
+        opportunity_id: JobOpportunity primary key.
+        new_state: Target JobState.
+
+    Returns:
+        Updated JobOpportunity.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
@@ -124,6 +158,18 @@ def set_opportunity_scored(
     screen_bucket: str,
     scored_at: Optional[str] = None,
 ) -> JobOpportunity:
+    """Persist scoring results and move opportunity to SCREENED.
+
+    Args:
+        opportunity_id: JobOpportunity primary key.
+        score: Score 0-100.
+        decision: Decision label.
+        screen_bucket: Screen bucket label.
+        scored_at: Optional ISO timestamp.
+
+    Returns:
+        Updated JobOpportunity.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
@@ -155,6 +201,19 @@ def add_application(
     description_hash: Optional[str],
     applied_at: Optional[str] = None,
 ) -> Application:
+    """Record an application for skip-recently-applied checks.
+
+    Args:
+        candidate_id: Candidate primary key.
+        dedupe_key_strong: Strong dedupe key.
+        canonical_url: Canonical job URL.
+        dedupe_key_soft: Soft dedupe key.
+        description_hash: Description hash.
+        applied_at: Optional ISO timestamp.
+
+    Returns:
+        Application record.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
@@ -182,6 +241,19 @@ def should_skip_recently_applied(
     description_hash: Optional[str],
     days: int = 7,
 ) -> bool:
+    """Check if a similar job was applied to recently.
+
+    Args:
+        candidate_id: Candidate primary key.
+        dedupe_key_strong: Strong dedupe key.
+        canonical_url: Canonical job URL.
+        dedupe_key_soft: Soft dedupe key.
+        description_hash: Description hash.
+        days: Lookback window in days.
+
+    Returns:
+        True if recently applied, otherwise False.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
@@ -209,6 +281,15 @@ def should_skip_recently_applied(
 
 
 def mark_skipped_recently_applied(opportunity_id: str, reason: str = "applied_within_7_days") -> JobOpportunity:
+    """Mark an opportunity as skipped due to recent application.
+
+    Args:
+        opportunity_id: JobOpportunity primary key.
+        reason: Skip reason string.
+
+    Returns:
+        Updated JobOpportunity.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
@@ -236,6 +317,23 @@ def save_job_fit_evaluation(
     model: Optional[str],
     raw_response: Optional[str],
 ) -> JobFitEvaluation:
+    """Persist a JobFitEvaluation record.
+
+    Args:
+        candidate_id: Candidate primary key.
+        job_id: Job primary key.
+        overall_score: Score 0-100.
+        decision: Decision label.
+        subscores: Subscore dict.
+        top_reasons: List of reasons.
+        gaps: List of gaps.
+        dealbreakers_triggered: List of triggered dealbreakers.
+        model: Model name or None.
+        raw_response: Raw LLM response or None.
+
+    Returns:
+        JobFitEvaluation record.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:

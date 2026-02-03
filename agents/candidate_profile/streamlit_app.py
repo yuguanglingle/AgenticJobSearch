@@ -1,4 +1,6 @@
-﻿import json
+"""Streamlit UI for candidate profile management."""
+
+import json
 import sys
 from pathlib import Path
 

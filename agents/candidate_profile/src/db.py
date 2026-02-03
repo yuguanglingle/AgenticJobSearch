@@ -1,4 +1,6 @@
-﻿import os
+"""Database access for candidate profiles."""
+
+import os
 import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -8,6 +10,22 @@ from db.utils import get_engine, init_db
 
 
 class Candidate(SQLModel, table=True):
+    """Candidate record stored in the shared database.
+
+    Args:
+        id: Candidate primary key.
+        name: Candidate name.
+        email: Candidate email.
+        resume_raw: Raw resume text.
+        candidate_profile_json: Serialized profile JSON.
+        llm_model: Model name.
+        prompt_version: Prompt version.
+        created_at: ISO timestamp string.
+        updated_at: ISO timestamp string.
+
+    Returns:
+        None.
+    """
     id: str = Field(primary_key=True)
     name: Optional[str] = None
     email: Optional[str] = None
@@ -20,6 +38,22 @@ class Candidate(SQLModel, table=True):
 
 
 class CandidatePreferences(SQLModel, table=True):
+    """Candidate preferences associated with a candidate.
+
+    Args:
+        candidate_id: Candidate primary key.
+        locations: JSON list string.
+        remote_preference: Remote preference string.
+        role_targets: JSON list string.
+        industries: JSON list string.
+        dealbreakers: JSON list string.
+        comp_min: Minimum compensation.
+        work_auth: Work authorization.
+        updated_at: ISO timestamp string.
+
+    Returns:
+        None.
+    """
     candidate_id: str = Field(primary_key=True, foreign_key="candidate.id")
     locations: str = "[]"
     remote_preference: Optional[str] = None
@@ -32,6 +66,21 @@ class CandidatePreferences(SQLModel, table=True):
 
 
 class AgentRun(SQLModel, table=True):
+    """Log of a single agent run invocation.
+
+    Args:
+        id: AgentRun primary key.
+        candidate_id: Candidate primary key.
+        run_id: Agent run id.
+        agent_name: Agent name.
+        input_json: Serialized input JSON.
+        output_json: Serialized output JSON.
+        raw_llm_response: Raw LLM response.
+        created_at: ISO timestamp string.
+
+    Returns:
+        None.
+    """
     id: str = Field(primary_key=True)
     candidate_id: str = Field(foreign_key="candidate.id")
     run_id: str
@@ -43,7 +92,14 @@ class AgentRun(SQLModel, table=True):
 
 
 def get_db_path() -> str:
-    """Get database path for candidate profile."""
+    """Get database path for candidate profile.
+
+    Args:
+        None.
+
+    Returns:
+        Database path string.
+    """
     db_path = os.getenv("DB_PATH")
     if not db_path:
         base_dir = Path(__file__).resolve().parents[2]
@@ -62,6 +118,21 @@ def save_candidate(
     updated_at: str,
     preferences: Dict[str, Any],
 ) -> None:
+    """Create or update candidate and preferences.
+
+    Args:
+        candidate_id: Candidate primary key.
+        resume_raw: Raw resume text.
+        candidate_profile_json: Profile JSON string.
+        llm_model: Model name.
+        prompt_version: Prompt version.
+        created_at: ISO timestamp string.
+        updated_at: ISO timestamp string.
+        preferences: Preferences dict.
+
+    Returns:
+        None.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
@@ -122,6 +193,21 @@ def save_agent_run(
     raw_llm_response: Optional[str],
     created_at: str,
 ) -> None:
+    """Create or update candidate and preferences.
+
+    Args:
+        candidate_id: Candidate primary key.
+        resume_raw: Raw resume text.
+        candidate_profile_json: Profile JSON string.
+        llm_model: Model name.
+        prompt_version: Prompt version.
+        created_at: ISO timestamp string.
+        updated_at: ISO timestamp string.
+        preferences: Preferences dict.
+
+    Returns:
+        None.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
@@ -141,6 +227,14 @@ def save_agent_run(
 
 
 def list_candidates() -> List[Candidate]:
+    """List candidates ordered by updated_at descending.
+
+    Args:
+        None.
+
+    Returns:
+        List of Candidate records.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
@@ -149,6 +243,14 @@ def list_candidates() -> List[Candidate]:
 
 
 def get_candidate(candidate_id: str) -> Optional[Candidate]:
+    """Fetch a candidate by id.
+
+    Args:
+        candidate_id: Candidate primary key.
+
+    Returns:
+        Candidate record or None.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
@@ -156,6 +258,14 @@ def get_candidate(candidate_id: str) -> Optional[Candidate]:
 
 
 def get_candidate_preferences(candidate_id: str) -> Optional[CandidatePreferences]:
+    """Fetch candidate preferences by candidate id.
+
+    Args:
+        candidate_id: Candidate primary key.
+
+    Returns:
+        CandidatePreferences record or None.
+    """
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:

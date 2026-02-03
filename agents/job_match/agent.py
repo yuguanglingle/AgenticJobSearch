@@ -17,6 +17,14 @@ _job_search_db = None
 
 
 def _get_candidate_db():
+    """Load candidate_profile db module lazily.
+
+    Args:
+        None.
+
+    Returns:
+        Imported candidate_profile.src.db module.
+    """
     global _candidate_db
     if _candidate_db is None:
         base_dir = Path(__file__).resolve().parents[1]
@@ -28,6 +36,14 @@ def _get_candidate_db():
 
 
 def _get_job_search_db():
+    """Load job_search db module lazily.
+
+    Args:
+        None.
+
+    Returns:
+        Imported job_search.db module.
+    """
     global _job_search_db
     if _job_search_db is None:
         base_dir = Path(__file__).resolve().parents[1]
@@ -39,6 +55,14 @@ def _get_job_search_db():
 
 
 def _safe_json_loads(payload: Optional[str]) -> dict:
+    """Safely parse JSON string into dict.
+
+    Args:
+        payload: JSON string or None.
+
+    Returns:
+        Parsed dict or empty dict on error.
+    """
     if not payload:
         return {}
     try:
@@ -48,6 +72,14 @@ def _safe_json_loads(payload: Optional[str]) -> dict:
 
 
 def _extract_candidate_profile(profile_json: str) -> dict:
+    """Extract candidate_profile dict from stored JSON envelope.
+
+    Args:
+        profile_json: Raw JSON string.
+
+    Returns:
+        Candidate profile dict (empty if missing).
+    """
     data = _safe_json_loads(profile_json)
     result = data.get("result", {})
     candidate_profile = result.get("candidate_profile", {})
@@ -55,6 +87,14 @@ def _extract_candidate_profile(profile_json: str) -> dict:
 
 
 def _extract_preferences(candidate_id: str) -> dict:
+    """Load candidate preferences and normalize into lists.
+
+    Args:
+        candidate_id: Candidate primary key.
+
+    Returns:
+        Dict of preferences with lists and scalar fields.
+    """
     candidate_db = _get_candidate_db()
     prefs = candidate_db.get_candidate_preferences(candidate_id)
     if not prefs:
@@ -75,6 +115,15 @@ def _extract_preferences(candidate_id: str) -> dict:
 
 
 def _candidate_keywords(profile: dict, preferences: dict) -> list[str]:
+    """Collect keyword signals for ranking.
+
+    Args:
+        profile: Candidate profile dict.
+        preferences: Candidate preferences dict.
+
+    Returns:
+        List of keyword strings.
+    """
     keywords = []
     keywords.extend(profile.get("keywords_for_search", []))
     keywords.extend(profile.get("core_skills", []))
@@ -85,6 +134,14 @@ def _candidate_keywords(profile: dict, preferences: dict) -> list[str]:
 
 
 def _decision_from_score(score: int) -> str:
+    """Map score to decision bucket.
+
+    Args:
+        score: Overall score 0-100.
+
+    Returns:
+        Decision string.
+    """
     if score >= 75:
         return "strong_yes"
     if score >= 55:
@@ -93,6 +150,14 @@ def _decision_from_score(score: int) -> str:
 
 
 def _bucket_from_score(score: int) -> str:
+    """Map score to screen bucket.
+
+    Args:
+        score: Overall score 0-100.
+
+    Returns:
+        Screen bucket string.
+    """
     if score >= 75:
         return "recommended"
     if score >= 55:
@@ -102,6 +167,20 @@ def _bucket_from_score(score: int) -> str:
 
 @dataclass
 class JobFitResult:
+    """Job fit evaluation output container.
+
+    Args:
+        overall_score: Overall score 0-100.
+        decision: Decision label.
+        subscores: Dict of sub-scores.
+        top_reasons: List of reasons.
+        gaps: List of gaps.
+        dealbreakers_triggered: List of triggered dealbreakers.
+        used_llm: True if LLM was used.
+
+    Returns:
+        None.
+    """
     overall_score: int
     decision: str
     subscores: dict
@@ -112,10 +191,35 @@ class JobFitResult:
 
 
 class JobFitAgent:
+    """Evaluates job fit using heuristics and optional LLM.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
     def __init__(self, llm_client: Optional[Any] = None) -> None:
+        """Create a JobFitAgent.
+
+        Args:
+            llm_client: Optional LLM client instance.
+
+        Returns:
+            None.
+        """
         self.llm_client = llm_client
 
     def evaluate(self, candidate_id: str, job_id: str) -> JobFitResult:
+        """Evaluate job fit for candidate and job.
+
+        Args:
+            candidate_id: Candidate primary key.
+            job_id: Job primary key.
+
+        Returns:
+            JobFitResult with scores and decision.
+        """
         candidate_db = _get_candidate_db()
         candidate = candidate_db.get_candidate(candidate_id)
         if not candidate:
@@ -155,6 +259,14 @@ class JobFitAgent:
             return self._fallback_eval(retrieval_score, reasons, used_llm=False)
 
     def _load_job(self, job_id: str) -> Optional[Any]:
+        """Load a job record by id.
+
+        Args:
+            job_id: Job primary key.
+
+        Returns:
+            Job record or None.
+        """
         job_search_db = _get_job_search_db()
         db_path = job_search_db.get_db_path()
         engine = job_search_db.init_db(db_path)
@@ -162,6 +274,15 @@ class JobFitAgent:
             return session.get(job_search_db.Job, job_id)
 
     def _update_job_retrieval_score(self, job_id: str, retrieval_score: float) -> None:
+        """Persist retrieval score on the job.
+
+        Args:
+            job_id: Job primary key.
+            retrieval_score: Heuristic score 0.0-1.0.
+
+        Returns:
+            None.
+        """
         job_search_db = _get_job_search_db()
         db_path = job_search_db.get_db_path()
         engine = job_search_db.init_db(db_path)
@@ -173,6 +294,16 @@ class JobFitAgent:
                 session.commit()
 
     def _fallback_eval(self, retrieval_score: float, reasons: dict, used_llm: bool) -> JobFitResult:
+        """Build a fallback evaluation result without LLM.
+
+        Args:
+            retrieval_score: Heuristic score 0.0-1.0.
+            reasons: Reasons dict from pre-ranker.
+            used_llm: Whether LLM was used.
+
+        Returns:
+            JobFitResult.
+        """
         score = int(round(retrieval_score * 100))
         decision = _decision_from_score(score)
         return JobFitResult(
@@ -192,6 +323,17 @@ class JobFitAgent:
         job: Any,
         retrieval_score: float,
     ) -> JobFitResult:
+        """Call LLM to score job fit.
+
+        Args:
+            profile: Candidate profile dict.
+            preferences: Candidate preferences dict.
+            job: Job record.
+            retrieval_score: Heuristic score 0.0-1.0.
+
+        Returns:
+            JobFitResult.
+        """
         system_prompt = (
             "You are a strict job fit evaluator. Return JSON only with keys: "
             "overall_score (0-100), decision (strong_yes|maybe|no), "
@@ -229,6 +371,16 @@ class JobFitAgent:
 
 
 def evaluate_and_persist(candidate_id: str, job_id: str, llm_client: Optional[Any] = None) -> JobFitResult:
+    """Evaluate job fit and persist evaluation + opportunity updates.
+
+    Args:
+        candidate_id: Candidate primary key.
+        job_id: Job primary key.
+        llm_client: Optional LLM client instance.
+
+    Returns:
+        JobFitResult.
+    """
     agent = JobFitAgent(llm_client=llm_client)
     opportunity = job_match_db.get_or_create_opportunity(candidate_id, job_id)
     if JobState(opportunity.state) == JobState.CLOSED:
