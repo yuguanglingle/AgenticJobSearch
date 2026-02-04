@@ -70,8 +70,8 @@ class ToneStyle(BaseModel):
     Returns:
         None.
     """
-    voice: Literal["warm", "direct", "formal"]
-    length: Literal["short", "medium"]
+    voice: Optional[Literal["warm", "direct", "formal", ""]] = ""
+    length: Optional[Literal["short", "medium", ""]] = ""
 
 
 class CandidateProfile(BaseModel):
@@ -90,7 +90,7 @@ class CandidateProfile(BaseModel):
         None.
     """
     headline: str
-    seniority_estimate: Literal["mid", "senior", "staff"]
+    seniority_estimate: Optional[Literal["mid", "senior", "staff", "junior"]] = "mid"
     core_skills: List[str] = Field(default_factory=list)
     domains: List[str] = Field(default_factory=list)
     experience_highlights: List[ExperienceHighlight] = Field(default_factory=list)

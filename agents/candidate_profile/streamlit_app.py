@@ -180,6 +180,7 @@ with col3:
             st.success("✓ Profile generated!")
         except Exception as exc:
             st.error(f"Error: {str(exc)}")
+            print(f"Candidate profile generation failed: {exc}")
     
     st.divider()
     

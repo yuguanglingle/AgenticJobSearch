@@ -73,7 +73,7 @@ def generate_candidate_profile(
 
     try:
         envelope = parse_response(raw_response)
-    except (json.JSONDecodeError, ValidationError):
+    except (json.JSONDecodeError, ValidationError) as exc:
         fixed = client.fix_json(system_prompt=SYSTEM_PROMPT, bad_json=raw_response)
         usage_summary = client.usage_summary()
         usage_raw = client.last_usage
@@ -81,7 +81,13 @@ def generate_candidate_profile(
             envelope = parse_response(fixed)
             raw_response = fixed
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise ValueError("LLM returned invalid JSON.") from exc
+            error_details = exc.errors() if isinstance(exc, ValidationError) else str(exc)
+            raise ValueError(
+                "LLM returned invalid JSON.\n"
+                f"raw_response={raw_response}\n"
+                f"fixed_response={fixed}\n"
+                f"errors={error_details}"
+            ) from exc
 
     envelope.ok = True
     envelope.agent = AGENT_NAME
