@@ -165,11 +165,13 @@ def _pre_rank_discovered(candidate_id: str, job_ids: list[str]) -> list[PreRanke
     Returns:
         Sorted list of PreRankedOpportunity items (desc score).
     """
+    print(f"[pipeline] pre_rank: start candidate_id={candidate_id} job_ids={len(job_ids)}")
     preferences = _extract_preferences(candidate_id)
     profile = _extract_candidate_profile(_get_candidate_or_raise(candidate_id).candidate_profile_json)
     keywords = _candidate_keywords(profile, preferences)
 
     db_path = job_match_db.get_db_path()
+    print(f"[pipeline] pre_rank: job_match_db_path={db_path}")
     engine = job_match_db.init_db(db_path)
     with Session(engine) as session:
         statement = select(job_match_db.JobOpportunity).where(
@@ -178,13 +180,17 @@ def _pre_rank_discovered(candidate_id: str, job_ids: list[str]) -> list[PreRanke
             job_match_db.JobOpportunity.state == JobState.DISCOVERED.value,
         )
         opportunities = session.exec(statement).all()
+    print(f"[pipeline] pre_rank: opportunities_found={len(opportunities)}")
 
     pre_ranked: list[PreRankedOpportunity] = []
-    job_engine = job_search_db.init_db(db_path)
+    job_db_path = job_search_db.get_db_path()
+    print(f"[pipeline] pre_rank: job_search_db_path={job_db_path}")
+    job_engine = job_search_db.init_db(job_db_path)
     with Session(job_engine) as session:
         for opp in opportunities:
             job = session.get(job_search_db.Job, opp.job_id)
             if not job:
+                print(f"[pipeline] pre_rank: missing job record job_id={opp.job_id}")
                 continue
             retrieval_score, _ = compute_retrieval_score(
                 job_title=job.job_title,
@@ -204,6 +210,7 @@ def _pre_rank_discovered(candidate_id: str, job_ids: list[str]) -> list[PreRanke
                     score=retrieval_score,
                 )
             )
+    print(f"[pipeline] pre_rank: pre_ranked_count={len(pre_ranked)}")
     pre_ranked.sort(key=lambda item: item.score, reverse=True)
     return pre_ranked
 
@@ -219,12 +226,15 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
     Returns:
         Dict of pipeline stats (batch ids, counts, scoring totals).
     """
+    print(f"[pipeline] start run_daily candidate_id={candidate_id} limit_to_score={limit_to_score}")
     _get_candidate_or_raise(candidate_id)
 
     # 1) Pull jobs from providers and persist (dedupe happens in save).
+    print("[pipeline] step 1: retrieve jobs from providers")
     client = JobSearchClient(provider_config)
     batch_data = client.run()
     job_ids = job_search_db.save_retrieval_batch(batch_data)
+    print(f"[pipeline] retrieved_jobs={len(job_ids)}")
 
     # 2) Load batch stats for reporting (optional).
     batch_id = batch_data.get("retrieval_batch", {}).get("batch_id")
@@ -235,20 +245,27 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
     num_pre_ranked = 0
 
     # 3) Ensure opportunities exist and filter eligible DISCOVERED items.
+    print("[pipeline] step 3: ensure opportunities and filter eligible")
     eligible_job_ids: list[str] = []
     for job_id in job_ids:
         opp = orchestrator_state.get_or_create_opportunity(candidate_id, job_id)
         if opp.is_skipped_recently_applied:
+            print(f"[pipeline] step 3: skip job_id={job_id} reason=recently_applied")
             continue
         if opp.state != JobState.DISCOVERED.value:
+            print(f"[pipeline] step 3: skip job_id={job_id} reason=state_{opp.state}")
             continue
+        print(f"[pipeline] step 3: eligible job_id={job_id}")
         eligible_job_ids.append(job_id)
 
     # 4) Pre-rank only eligible DISCOVERED opportunities.
+    print(f"[pipeline] step 4: pre-rank eligible_count={len(eligible_job_ids)}")
     pre_ranked = _pre_rank_discovered(candidate_id, eligible_job_ids)
     num_pre_ranked = len(pre_ranked)
+    print(f"[pipeline] step 4: pre_ranked_count={num_pre_ranked}")
 
     # 5) Prepare LLM client if available and reuse DB engine.
+    print("[pipeline] step 5: prepare LLM client")
     llm_client = _load_llm_client()
     db_path = job_match_db.get_db_path()
     job_engine = job_search_db.init_db(db_path)
@@ -256,6 +273,7 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
     agent_no_llm = JobFitAgent(llm_client=None)
 
     # 6) Score the top-N pre-ranked opportunities.
+    print(f"[pipeline] step 6: score top_n={max(0, limit_to_score)}")
     for item in pre_ranked[: max(0, limit_to_score)]:
         with Session(job_engine) as session:
             job_record = session.get(job_search_db.Job, item.job_id)
@@ -269,14 +287,17 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
             dedupe_key_soft=job_record.dedupe_key_soft,
             description_hash=job_record.description_hash,
         ):
+            print(f"[pipeline] skip recently applied job_id={item.job_id}")
             orchestrator_state.mark_skipped_recently_applied(candidate_id, item.job_id)
             num_skipped_recent_apply += 1
             continue
 
         # Only send to LLM when the heuristic score passes threshold.
         if item.score < LLM_SCORE_THRESHOLD:
+            print(f"[pipeline] score job_id={item.job_id} using fallback pre_rank_score={item.score:.2f}")
             result = agent_no_llm.evaluate(candidate_id, item.job_id)
         else:
+            print(f"[pipeline] score job_id={item.job_id} using LLM pre_rank_score={item.score:.2f}")
             result = agent_with_llm.evaluate(candidate_id, item.job_id)
         orchestrator_state.apply_fit_result(
             candidate_id,
@@ -293,6 +314,7 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
         num_scored += 1
 
     # 7) Return a compact stats payload for logging/UI.
+    print("[pipeline] step 7: return stats")
     stats = {
         "candidate_id": candidate_id,
         "batch_id": batch_id,
@@ -325,8 +347,10 @@ def run_daily_from_batch(
     Returns:
         Dict of pipeline stats (batch ids, counts, scoring totals).
     """
+    print(f"[pipeline] start run_daily_from_batch candidate_id={candidate_id} limit_to_score={limit_to_score}")
     _get_candidate_or_raise(candidate_id)
 
+    print("[pipeline] step 1: save retrieval batch")
     job_ids = job_search_db.save_retrieval_batch(batch_data)
     batch_id = batch_data.get("retrieval_batch", {}).get("batch_id")
     batch_meta = job_search_db.get_retrieval_batch(batch_id) if batch_id else None
@@ -335,17 +359,23 @@ def run_daily_from_batch(
     num_scored = 0
     num_pre_ranked = 0
 
+    print("[pipeline] step 2: ensure opportunities and filter eligible")
     eligible_job_ids: list[str] = []
     for job_id in job_ids:
         opp = orchestrator_state.get_or_create_opportunity(candidate_id, job_id)
         if opp.is_skipped_recently_applied:
+            print(f"[pipeline] step 2: skip job_id={job_id} reason=recently_applied")
             continue
         if opp.state != JobState.DISCOVERED.value:
+            print(f"[pipeline] step 2: skip job_id={job_id} reason=state_{opp.state}")
             continue
+        print(f"[pipeline] step 2: eligible job_id={job_id}")
         eligible_job_ids.append(job_id)
 
+    print(f"[pipeline] step 3: pre-rank eligible_count={len(eligible_job_ids)}")
     pre_ranked = _pre_rank_discovered(candidate_id, eligible_job_ids)
     num_pre_ranked = len(pre_ranked)
+    print(f"[pipeline] step 3: pre_ranked_count={num_pre_ranked}")
 
     db_path = job_match_db.get_db_path()
     job_engine = job_search_db.init_db(db_path)
@@ -357,6 +387,7 @@ def run_daily_from_batch(
         with Session(job_engine) as session:
             job_record = session.get(job_search_db.Job, item.job_id)
         if not job_record:
+            print(f"[pipeline] step 3: missing job_id={item.job_id}, skipping")
             continue
         if job_match_db.should_skip_recently_applied(
             candidate_id,
@@ -365,13 +396,16 @@ def run_daily_from_batch(
             dedupe_key_soft=job_record.dedupe_key_soft,
             description_hash=job_record.description_hash,
         ):
+            print(f"[pipeline] skip recently applied job_id={item.job_id}")
             orchestrator_state.mark_skipped_recently_applied(candidate_id, item.job_id)
             num_skipped_recent_apply += 1
             continue
 
         if item.score < LLM_SCORE_THRESHOLD:
+            print(f"[pipeline] score job_id={item.job_id} using fallback pre_rank_score={item.score:.2f}")
             result = agent_no_llm.evaluate(candidate_id, item.job_id)
         else:
+            print(f"[pipeline] score job_id={item.job_id} using LLM pre_rank_score={item.score:.2f}")
             result = agent_with_llm.evaluate(candidate_id, item.job_id)
         orchestrator_state.apply_fit_result(
             candidate_id,
@@ -389,6 +423,7 @@ def run_daily_from_batch(
         )
         num_scored += 1
 
+    print("[pipeline] step 4: return stats")
     return {
         "candidate_id": candidate_id,
         "batch_id": batch_id,
