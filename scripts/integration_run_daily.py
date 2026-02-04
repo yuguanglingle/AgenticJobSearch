@@ -14,13 +14,17 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 
-AGENTS_DIR = Path(__file__).resolve().parents[1] / "agents"
+ROOT_DIR = Path(__file__).resolve().parents[1]
+AGENTS_DIR = ROOT_DIR / "agents"
+SHARED_DB_PATH = (ROOT_DIR / "data" / "app.db").resolve()
 if str(AGENTS_DIR) not in sys.path:
     sys.path.insert(0, str(AGENTS_DIR))
 
 from candidate_profile.src import db as candidate_db
+from job_search import db as job_search_db
 from job_search.job_search_client import DEFAULT_CONFIG
 from orchestrator import pipeline
+from sqlmodel import Session, select
 
 load_dotenv()
 
@@ -105,6 +109,30 @@ def _load_sample_batch(sample_jobs_path: Path, limit: int) -> dict:
     }
 
 
+def _load_existing_jobs(limit: int) -> list[dict]:
+    db_path = job_search_db.get_db_path()
+    engine = job_search_db.init_db(db_path)
+    with Session(engine) as session:
+        statement = select(job_search_db.Job).order_by(job_search_db.Job.created_at.desc()).limit(limit)
+        jobs = session.exec(statement).all()
+        return [
+            {
+                "source": job.source,
+                "source_job_id": job.source_job_id,
+                "job_title": job.job_title,
+                "title": job.job_title,
+                "company": job.company,
+                "location": job.location,
+                "description": job.description or job.description_text,
+                "canonical_url": job.canonical_url,
+                "dedupe_key_strong": job.dedupe_key_strong,
+                "dedupe_key_soft": job.dedupe_key_soft,
+                "description_hash": job.description_hash,
+            }
+            for job in jobs
+        ]
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mock", action="store_true", help="Use sample candidate + jobs.")
@@ -114,13 +142,30 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    os.environ.setdefault("DB_PATH", str((AGENTS_DIR / "data" / "app.db").resolve()))
+    os.environ.setdefault("DB_PATH", str(SHARED_DB_PATH))
+    print(f"[integration] using DB_PATH={os.environ.get('DB_PATH')}")
     sample_profile_path = AGENTS_DIR / "candidate_profile" / "samples" / "sample_profile.json"
     candidate_id = _ensure_candidate_id(sample_profile_path if args.mock else None)
 
     if args.mock:
-        sample_jobs_path = AGENTS_DIR / "job_search" / "sample_theirstack_response.json"
-        batch = _load_sample_batch(sample_jobs_path, limit=max(1, args.limit))
+        print("[integration] running daily pipeline with mock data")
+        existing_jobs = _load_existing_jobs(limit=max(1, args.limit))
+        if existing_jobs:
+            now = _now_iso()
+            batch = {
+                "retrieval_batch": {
+                    "batch_id": f"existing-{uuid4()}",
+                    "started_at": now,
+                    "finished_at": now,
+                },
+                "jobs": existing_jobs,
+                "stats": {"sources_checked": 1, "jobs_fetched": len(existing_jobs)},
+            }
+            print(f"[integration] using existing jobs from db count={len(existing_jobs)}")
+        else:
+            sample_jobs_path = AGENTS_DIR / "job_search" / "sample_theirstack_response.json"
+            batch = _load_sample_batch(sample_jobs_path, limit=max(1, args.limit))
+            print("[integration] using sample job payload")
         stats = pipeline.run_daily_from_batch(
             candidate_id=candidate_id,
             batch_data=batch,
