@@ -142,7 +142,9 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    os.environ.setdefault("DB_PATH", str(SHARED_DB_PATH))
+    # Ensure DB_PATH is set even if the environment variable is present but empty
+    if not os.getenv("DB_PATH"):
+        os.environ["DB_PATH"] = str(SHARED_DB_PATH)
     print(f"[integration] using DB_PATH={os.environ.get('DB_PATH')}")
     sample_profile_path = AGENTS_DIR / "candidate_profile" / "samples" / "sample_profile.json"
     candidate_id = _ensure_candidate_id(sample_profile_path if args.mock else None)

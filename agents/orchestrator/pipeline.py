@@ -56,6 +56,27 @@ def _load_llm_client() -> Optional[Any]:
     return LLMClient()
 
 
+def _ensure_shared_db_path() -> str:
+    """Ensure job_search and job_match use the same DB path.
+
+    Args:
+        None.
+
+    Returns:
+        Shared DB path string.
+    """
+    job_match_path = job_match_db.get_db_path()
+    job_search_path = job_search_db.get_db_path()
+    if os.path.abspath(job_match_path) != os.path.abspath(job_search_path):
+        print(
+            "[pipeline] warning: DB_PATH mismatch; "
+            f"job_match={job_match_path} job_search={job_search_path}. "
+            "Forcing shared DB_PATH to job_match."
+        )
+        os.environ["DB_PATH"] = job_match_path
+    return job_match_path
+
+
 def _get_candidate_or_raise(candidate_id: str):
     """Fetch candidate or raise ValueError if missing.
 
@@ -170,7 +191,7 @@ def _pre_rank_discovered(candidate_id: str, job_ids: list[str]) -> list[PreRanke
     profile = _extract_candidate_profile(_get_candidate_or_raise(candidate_id).candidate_profile_json)
     keywords = _candidate_keywords(profile, preferences)
 
-    db_path = job_match_db.get_db_path()
+    db_path = _ensure_shared_db_path()
     print(f"[pipeline] pre_rank: job_match_db_path={db_path}")
     engine = job_match_db.init_db(db_path)
     with Session(engine) as session:
@@ -184,13 +205,19 @@ def _pre_rank_discovered(candidate_id: str, job_ids: list[str]) -> list[PreRanke
 
     pre_ranked: list[PreRankedOpportunity] = []
     job_db_path = job_search_db.get_db_path()
-    print(f"[pipeline] pre_rank: job_search_db_path={job_db_path}")
+    print(f"[pipeline] pre_rank: job_search_db_path={job_db_path} job_ids_sample={job_ids[:5]}")
     job_engine = job_search_db.init_db(job_db_path)
+    missing_jobs = 0
     with Session(job_engine) as session:
         for opp in opportunities:
             job = session.get(job_search_db.Job, opp.job_id)
             if not job:
-                print(f"[pipeline] pre_rank: missing job record job_id={opp.job_id}")
+                print(f"[pipeline] pre_rank: missing job record job_id={opp.job_id} - closing opportunity")
+                missing_jobs += 1
+                try:
+                    job_match_db.update_opportunity_state(opp.id, JobState.CLOSED)
+                except Exception as e:
+                    print(f"[pipeline] pre_rank: could not close opportunity {opp.id} {e}")
                 continue
             retrieval_score, _ = compute_retrieval_score(
                 job_title=job.job_title,
@@ -210,7 +237,10 @@ def _pre_rank_discovered(candidate_id: str, job_ids: list[str]) -> list[PreRanke
                     score=retrieval_score,
                 )
             )
-    print(f"[pipeline] pre_rank: pre_ranked_count={len(pre_ranked)}")
+    print(
+        "[pipeline] pre_rank: "
+        f"pre_ranked_count={len(pre_ranked)} missing_jobs={missing_jobs}"
+    )
     pre_ranked.sort(key=lambda item: item.score, reverse=True)
     return pre_ranked
 
@@ -227,10 +257,11 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
         Dict of pipeline stats (batch ids, counts, scoring totals).
     """
     print(f"[pipeline] start run_daily candidate_id={candidate_id} limit_to_score={limit_to_score}")
+    shared_db_path = _ensure_shared_db_path()
     _get_candidate_or_raise(candidate_id)
 
     # 1) Pull jobs from providers and persist (dedupe happens in save).
-    print("[pipeline] step 1: retrieve jobs from providers")
+    print(f"[pipeline] step 1: retrieve jobs from providers db_path={shared_db_path}")
     client = JobSearchClient(provider_config)
     batch_data = client.run()
     job_ids = job_search_db.save_retrieval_batch(batch_data)
@@ -267,7 +298,7 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
     # 5) Prepare LLM client if available and reuse DB engine.
     print("[pipeline] step 5: prepare LLM client")
     llm_client = _load_llm_client()
-    db_path = job_match_db.get_db_path()
+    db_path = _ensure_shared_db_path()
     job_engine = job_search_db.init_db(db_path)
     agent_with_llm = JobFitAgent(llm_client=llm_client)
     agent_no_llm = JobFitAgent(llm_client=None)
@@ -278,6 +309,11 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
         with Session(job_engine) as session:
             job_record = session.get(job_search_db.Job, item.job_id)
         if not job_record:
+            print(f"[pipeline] score skip missing job_record job_id={item.job_id} - closing opportunity")
+            try:
+                job_match_db.update_opportunity_state(item.opportunity_id, JobState.CLOSED)
+            except Exception as e:
+                print(f"[pipeline] score: could not close opportunity {item.opportunity_id} {e}")
             continue
         # Skip jobs that were applied to recently.
         if job_match_db.should_skip_recently_applied(
@@ -348,9 +384,10 @@ def run_daily_from_batch(
         Dict of pipeline stats (batch ids, counts, scoring totals).
     """
     print(f"[pipeline] start run_daily_from_batch candidate_id={candidate_id} limit_to_score={limit_to_score}")
+    shared_db_path = _ensure_shared_db_path()
     _get_candidate_or_raise(candidate_id)
 
-    print("[pipeline] step 1: save retrieval batch")
+    print(f"[pipeline] step 1: save retrieval batch db_path={shared_db_path}")
     job_ids = job_search_db.save_retrieval_batch(batch_data)
     batch_id = batch_data.get("retrieval_batch", {}).get("batch_id")
     batch_meta = job_search_db.get_retrieval_batch(batch_id) if batch_id else None
@@ -377,7 +414,7 @@ def run_daily_from_batch(
     num_pre_ranked = len(pre_ranked)
     print(f"[pipeline] step 3: pre_ranked_count={num_pre_ranked}")
 
-    db_path = job_match_db.get_db_path()
+    db_path = _ensure_shared_db_path()
     job_engine = job_search_db.init_db(db_path)
     effective_llm_client = llm_client or _load_llm_client()
     agent_with_llm = JobFitAgent(llm_client=effective_llm_client)
@@ -387,7 +424,11 @@ def run_daily_from_batch(
         with Session(job_engine) as session:
             job_record = session.get(job_search_db.Job, item.job_id)
         if not job_record:
-            print(f"[pipeline] step 3: missing job_id={item.job_id}, skipping")
+            print(f"[pipeline] score skip missing job_record job_id={item.job_id} - closing opportunity")
+            try:
+                job_match_db.update_opportunity_state(item.opportunity_id, JobState.CLOSED)
+            except Exception as e:
+                print(f"[pipeline] score: could not close opportunity {item.opportunity_id} {e}")
             continue
         if job_match_db.should_skip_recently_applied(
             candidate_id,

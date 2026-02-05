@@ -104,6 +104,7 @@ def get_db_path() -> str:
     if not db_path:
         base_dir = Path(__file__).resolve().parents[2]
         db_path = str(base_dir / "data" / "app.db")
+    print(f"[candidate_profile.db] DB_PATH={db_path}")
     return db_path
 
 
