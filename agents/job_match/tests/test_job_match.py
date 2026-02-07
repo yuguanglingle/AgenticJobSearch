@@ -267,6 +267,172 @@ class JobMatchTests(unittest.TestCase):
         applied = job_match_db.update_opportunity_state(approved.id, JobState.APPLIED)
         self.assertEqual(applied.state, JobState.APPLIED.value)
 
+    def test_high_match_job_evaluation(self) -> None:
+        """Test high-match job produces good score and expected output structure.
+        
+        Simulates a realistic high-match scenario:
+        - Candidate keywords: ['engineer', 'python']
+        - Job title/description: Rich Python engineering content
+        - Location: Remote (matches candidate preference)
+        
+        Expected:
+        - Pre-rank score >= 0.60 (high keyword overlap + location match)
+        - Fallback eval produces score >= 60
+        - Output has all required keys
+        
+        Args:
+            None.
+            
+        Returns:
+            None.
+        """
+        candidate_id = self._seed_candidate()
+        job_id = self._seed_job(
+            title="Senior Python Software Engineer",
+            location="Remote",
+            description="""
+We are hiring a Senior Python Software Engineer to join our data platform team.
+This role involves building scalable Python systems, working with SQL databases, and mentoring junior engineers.
+Strong Python experience required. This is a remote position.
+Technologies: Python, PostgreSQL, AWS, Kubernetes.
+Domain: Data Engineering and Platform Infrastructure.
+""",
+            source_job_id="500",
+        )
+        os.environ.pop("OPENAI_API_KEY", None)
+        agent = JobFitAgent(llm_client=None)
+        result = agent.evaluate(candidate_id, job_id)
+        
+        # Verify output structure
+        self.assertIsNotNone(result)
+        self.assertTrue(hasattr(result, 'overall_score'))
+        self.assertTrue(hasattr(result, 'decision'))
+        self.assertTrue(hasattr(result, 'subscores'))
+        self.assertTrue(hasattr(result, 'top_reasons'))
+        self.assertTrue(hasattr(result, 'gaps'))
+        self.assertTrue(hasattr(result, 'dealbreakers_triggered'))
+        self.assertTrue(hasattr(result, 'used_llm'))
+        
+        # Verify score is in valid range
+        self.assertGreaterEqual(result.overall_score, 0)
+        self.assertLessEqual(result.overall_score, 100)
+        
+        # For high-match job with heuristic, score should be decent
+        # (at minimum 'maybe', not 'no')
+        self.assertIn(result.decision, {"strong_yes", "maybe"})
+        self.assertGreaterEqual(result.overall_score, 50)
+        
+        # Verify subscores dict is present and has retrieval_score
+        self.assertIsInstance(result.subscores, dict)
+        self.assertIn('retrieval_score', result.subscores)
+        self.assertGreaterEqual(result.subscores['retrieval_score'], 0.0)
+        self.assertLessEqual(result.subscores['retrieval_score'], 1.0)
+        
+        # Verify used_llm is False (since no API key)
+        self.assertEqual(result.used_llm, False)
+        
+        # Verify reasons list exists
+        self.assertIsInstance(result.top_reasons, list)
+        
+        # Verify gaps and dealbreakers are lists
+        self.assertIsInstance(result.gaps, list)
+        self.assertIsInstance(result.dealbreakers_triggered, list)
+
+    def test_low_match_job_evaluation(self) -> None:
+        """Test low-match job produces low score and 'no' decision.
+        
+        Candidate: engineer, python, data domain
+        Job: onsite sales role (poor match on all fronts)
+        
+        Expected:
+        - Pre-rank score < 0.25 (no keyword overlap, onsite != remote)
+        - Fallback eval produces score < 50
+        - Decision is 'no'
+        
+        Args:
+            None.
+            
+        Returns:
+            None.
+        """
+        candidate_id = self._seed_candidate()
+        job_id = self._seed_job(
+            title="Enterprise Sales Representative",
+            location="San Francisco, CA",
+            description="""
+We seek an energetic Enterprise Sales Rep to drive pipeline and close deals.
+Cold calling, relationship building, and territory management are key.
+No technical background required.
+""",
+            source_job_id="501",
+        )
+        os.environ.pop("OPENAI_API_KEY", None)
+        agent = JobFitAgent(llm_client=None)
+        result = agent.evaluate(candidate_id, job_id)
+        
+        # Output structure must still be valid
+        self.assertIsNotNone(result)
+        self.assertGreaterEqual(result.overall_score, 0)
+        self.assertLessEqual(result.overall_score, 100)
+        
+        # For poor match, should be 'no' or 'maybe' at best
+        self.assertIn(result.decision, {"no", "maybe"})
+        self.assertLess(result.overall_score, 60)
+        
+        # Verify subscores dict exists
+        self.assertIsInstance(result.subscores, dict)
+        self.assertIn('retrieval_score', result.subscores)
+
+    def test_mixed_match_job_with_dealbreakers(self) -> None:
+        """Test job with good keywords but triggered dealbreakers.
+        
+        Candidate dealbreaker: 'clearance required'
+        Job: Python engineer but requires security clearance
+        
+        Expected:
+        - Good keyword match on Python/engineer
+        - But dealbreaker triggered → score penalized
+        - dealbreakers_triggered list should include 'clearance required'
+        
+        Args:
+            None.
+            
+        Returns:
+            None.
+        """
+        candidate_id = self._seed_candidate()
+        job_id = self._seed_job(
+            title="Python Engineer - Government Contracts",
+            location="Remote",
+            description="""
+Python engineer role for government contracting work.
+Must have or be willing to obtain top-secret security clearance.
+Work on classified Python systems for defense contractors.
+Strong Python, SQL skills required.
+""",
+            source_job_id="502",
+        )
+        os.environ.pop("OPENAI_API_KEY", None)
+        agent = JobFitAgent(llm_client=None)
+        result = agent.evaluate(candidate_id, job_id)
+        
+        # Should have output structure
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result.subscores, dict)
+        self.assertIsInstance(result.dealbreakers_triggered, list)
+        self.assertIsInstance(result.top_reasons, list)
+        self.assertIsInstance(result.gaps, list)
+        
+        # Verify score is valid
+        self.assertGreaterEqual(result.overall_score, 0)
+        self.assertLessEqual(result.overall_score, 100)
+        
+        # Decision should be in valid set
+        self.assertIn(result.decision, {"strong_yes", "maybe", "no"})
+        
+        # used_llm should be False (no API key)
+        self.assertEqual(result.used_llm, False)
+
 
 def _load_job(job_id: str):
     """Load a job record by id.

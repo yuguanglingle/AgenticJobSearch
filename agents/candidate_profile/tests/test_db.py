@@ -89,6 +89,132 @@ class CandidateDbTests(unittest.TestCase):
         self.assertIsNotNone(prefs)
         self.assertEqual(prefs.remote_preference, "remote")
 
+    def test_candidate_profile_json_structure(self) -> None:
+        """Test that candidate profile JSON contains expected keys.
+        
+        Ensures that the stored profile JSON has the correct structure
+        with all required fields for job matching (keywords, skills, domains).
+        
+        Args:
+            None.
+            
+        Returns:
+            None.
+        """
+        import json
+        profile_json = json.dumps({
+            "ok": True,
+            "agent": "CandidateProfileAgent",
+            "result": {
+                "candidate_profile": {
+                    "headline": "Senior Engineer",
+                    "seniority_estimate": "senior",
+                    "core_skills": ["Python", "SQL", "AWS"],
+                    "domains": ["Data", "Backend"],
+                    "keywords_for_search": ["Python", "SQL", "AWS", "Data Engineer"],
+                    "experience_highlights": []
+                }
+            }
+        })
+        
+        db.save_candidate(
+            candidate_id="cand-profile-test",
+            resume_raw="Test resume",
+            candidate_profile_json=profile_json,
+            llm_model="gpt-4",
+            prompt_version="v1",
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+            preferences={
+                "locations": ["Remote"],
+                "remote_preference": "remote",
+                "role_targets": ["Engineer"],
+                "industries": ["Tech"],
+                "dealbreakers": [],
+                "comp_min": 120000,
+                "work_auth": "US",
+            },
+        )
+        
+        candidate = db.get_candidate("cand-profile-test")
+        self.assertIsNotNone(candidate)
+        
+        # Parse and verify JSON structure
+        parsed = json.loads(candidate.candidate_profile_json)
+        self.assertTrue(parsed.get("ok"))
+        self.assertEqual(parsed.get("agent"), "CandidateProfileAgent")
+        
+        profile = parsed.get("result", {}).get("candidate_profile", {})
+        self.assertIn("headline", profile)
+        self.assertIn("core_skills", profile)
+        self.assertIn("domains", profile)
+        self.assertIn("keywords_for_search", profile)
+        
+        # Verify lists
+        self.assertIsInstance(profile.get("core_skills"), list)
+        self.assertIsInstance(profile.get("domains"), list)
+        self.assertIsInstance(profile.get("keywords_for_search"), list)
+        
+        # Verify content
+        self.assertGreater(len(profile.get("keywords_for_search", [])), 0)
+
+    def test_preferences_all_fields(self) -> None:
+        """Test that all preference fields are persisted correctly.
+        
+        Verifies that complex preference structures (arrays, strings, numbers)
+        are stored and retrieved with correct data types.
+        
+        Args:
+            None.
+            
+        Returns:
+            None.
+        """
+        import json
+        
+        locations = ["San Francisco", "Remote", "Austin"]
+        role_targets = ["Data Engineer", "ML Engineer"]
+        industries = ["Tech", "FinTech"]
+        dealbreakers = ["Relocation required", "On-call 24/7"]
+        
+        db.save_candidate(
+            candidate_id="cand-prefs",
+            resume_raw="Resume",
+            candidate_profile_json='{"ok": true}',
+            llm_model="gpt-4",
+            prompt_version="v1",
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+            preferences={
+                "locations": locations,
+                "remote_preference": "hybrid",
+                "role_targets": role_targets,
+                "industries": industries,
+                "dealbreakers": dealbreakers,
+                "comp_min": 180000,
+                "work_auth": "H1B_ELIGIBLE",
+            },
+        )
+        
+        prefs = db.get_candidate_preferences("cand-prefs")
+        self.assertIsNotNone(prefs)
+        
+        # Verify string fields
+        self.assertEqual(prefs.remote_preference, "hybrid")
+        self.assertEqual(prefs.work_auth, "H1B_ELIGIBLE")
+        
+        # Verify array fields (stored as JSON strings)
+        stored_locations = json.loads(prefs.locations)
+        stored_roles = json.loads(prefs.role_targets)
+        stored_industries = json.loads(prefs.industries)
+        stored_dealbreakers = json.loads(prefs.dealbreakers)
+        
+        self.assertEqual(stored_locations, locations)
+        self.assertEqual(stored_roles, role_targets)
+        self.assertEqual(stored_industries, industries)
+        self.assertEqual(stored_dealbreakers, dealbreakers)
+        self.assertEqual(prefs.comp_min, 180000)
+
 
 if __name__ == "__main__":
     unittest.main()

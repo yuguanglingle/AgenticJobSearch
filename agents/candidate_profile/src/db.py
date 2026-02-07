@@ -27,6 +27,7 @@ class Candidate(SQLModel, table=True):
         None.
     """
     id: str = Field(primary_key=True)
+    __table_args__ = {"extend_existing": True}
     name: Optional[str] = None
     email: Optional[str] = None
     resume_raw: str
@@ -55,6 +56,7 @@ class CandidatePreferences(SQLModel, table=True):
         None.
     """
     candidate_id: str = Field(primary_key=True, foreign_key="candidate.id")
+    __table_args__ = {"extend_existing": True}
     locations: str = "[]"
     remote_preference: Optional[str] = None
     role_targets: str = "[]"
@@ -82,6 +84,7 @@ class AgentRun(SQLModel, table=True):
         None.
     """
     id: str = Field(primary_key=True)
+    __table_args__ = {"extend_existing": True}
     candidate_id: str = Field(foreign_key="candidate.id")
     run_id: str
     agent_name: str
