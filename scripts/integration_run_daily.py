@@ -97,6 +97,71 @@ def _load_sample_batch(sample_jobs_path: Path, limit: int) -> dict:
     for job in jobs:
         job.setdefault("source", "theirstack")
 
+    # Add a high-quality mock job that matches the sample candidate profile
+    high_match_job = {
+        "id": 999999999,
+        "source": "mock",
+        "job_title": "Senior Business Development Manager",
+        "title": "Senior Business Development Manager",
+        "company": "TechFlow Partners",
+        "location": "San Francisco, CA",
+        "remote": True,
+        "hybrid": False,
+        "job_description": """
+Join TechFlow Partners as a Senior Business Development Manager leading our corporate strategy initiatives. 
+We are seeking an experienced professional to drive Business Development and Corporate Strategy efforts across our enterprise platform.
+
+Key Responsibilities:
+- Lead strategic planning initiatives to identify new market opportunities
+- Develop and execute corporate strategy for business expansion
+- Build and manage relationships with key partners and stakeholders
+- Analyze market trends and competitive landscape for strategic decision-making
+- Drive business development efforts across multiple verticals
+
+Required Experience:
+- 5+ years in Business Development, Corporate Strategy, or Strategic Planning
+- Proven track record building high-performing teams
+- Experience with market analysis and strategic planning
+- Strong understanding of enterprise software markets
+- Ability to partner across organizations and navigate complex stakeholder landscapes
+
+Why Join Us:
+- Competitive compensation with equity upside
+- Remote-friendly, collaborative culture
+- Opportunity to shape company strategy
+- Leadership role in a fast-growing organization
+""",
+        "description": """
+Join TechFlow Partners as a Senior Business Development Manager leading our corporate strategy initiatives. 
+We are seeking an experienced professional to drive Business Development and Corporate Strategy efforts across our enterprise platform.
+
+Key Responsibilities:
+- Lead strategic planning initiatives to identify new market opportunities
+- Develop and execute corporate strategy for business expansion
+- Build and manage relationships with key partners and stakeholders
+- Analyze market trends and competitive landscape for strategic decision-making
+- Drive business development efforts across multiple verticals
+
+Required Experience:
+- 5+ years in Business Development, Corporate Strategy, or Strategic Planning
+- Proven track record building high-performing teams
+- Experience with market analysis and strategic planning
+- Strong understanding of enterprise software markets
+- Ability to partner across organizations and navigate complex stakeholder landscapes
+
+Why Join Us:
+- Competitive compensation with equity upside
+- Remote-friendly, collaborative culture
+- Opportunity to shape company strategy
+- Leadership role in a fast-growing organization
+""",
+        "seniority": "mid_level",
+        "date_posted": datetime.now(timezone.utc).isoformat(),
+        "discovered_at": datetime.now(timezone.utc).isoformat(),
+        "employment_statuses": ["full_time"],
+    }
+    jobs.append(high_match_job)
+
     now = _now_iso()
     return {
         "retrieval_batch": {
@@ -136,6 +201,7 @@ def _load_existing_jobs(limit: int) -> list[dict]:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mock", action="store_true", help="Use sample candidate + jobs.")
+    parser.add_argument("--sample", action="store_true", help="Force use of sample job payload (skip existing DB jobs).")
     parser.add_argument("--limit", type=int, default=2, help="Limit number of jobs.")
     return parser.parse_args()
 
@@ -151,8 +217,8 @@ def main() -> int:
 
     if args.mock:
         print("[integration] running daily pipeline with mock data")
-        existing_jobs = _load_existing_jobs(limit=max(1, args.limit))
-        if existing_jobs:
+        existing_jobs = [] if args.sample else _load_existing_jobs(limit=max(1, args.limit))
+        if existing_jobs and not args.sample:
             now = _now_iso()
             batch = {
                 "retrieval_batch": {
