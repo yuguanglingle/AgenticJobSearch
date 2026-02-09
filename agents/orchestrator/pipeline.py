@@ -278,13 +278,17 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
     # 3) Ensure opportunities exist and filter eligible DISCOVERED items.
     print("[pipeline] step 3: ensure opportunities and filter eligible")
     eligible_job_ids: list[str] = []
+    num_skipped_recent_flag = 0
+    num_skipped_state = 0
     for job_id in job_ids:
         opp = orchestrator_state.get_or_create_opportunity(candidate_id, job_id)
         if opp.is_skipped_recently_applied:
             print(f"[pipeline] step 3: skip job_id={job_id} reason=recently_applied")
+            num_skipped_recent_flag += 1
             continue
         if opp.state != JobState.DISCOVERED.value:
             print(f"[pipeline] step 3: skip job_id={job_id} reason=state_{opp.state}")
+            num_skipped_state += 1
             continue
         print(f"[pipeline] step 3: eligible job_id={job_id}")
         eligible_job_ids.append(job_id)
@@ -360,6 +364,9 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
         "num_pre_ranked": num_pre_ranked,
         "num_scored": num_scored,
         "num_skipped_recent_apply": num_skipped_recent_apply,
+        "num_skipped_recent_flag": num_skipped_recent_flag,
+        "num_skipped_state": num_skipped_state,
+        "num_eligible": len(eligible_job_ids),
         "limit_to_score": limit_to_score,
     }
     return stats
@@ -398,13 +405,17 @@ def run_daily_from_batch(
 
     print("[pipeline] step 2: ensure opportunities and filter eligible")
     eligible_job_ids: list[str] = []
+    num_skipped_recent_flag = 0
+    num_skipped_state = 0
     for job_id in job_ids:
         opp = orchestrator_state.get_or_create_opportunity(candidate_id, job_id)
         if opp.is_skipped_recently_applied:
             print(f"[pipeline] step 2: skip job_id={job_id} reason=recently_applied")
+            num_skipped_recent_flag += 1
             continue
         if opp.state != JobState.DISCOVERED.value:
             print(f"[pipeline] step 2: skip job_id={job_id} reason=state_{opp.state}")
+            num_skipped_state += 1
             continue
         print(f"[pipeline] step 2: eligible job_id={job_id}")
         eligible_job_ids.append(job_id)
@@ -474,5 +485,8 @@ def run_daily_from_batch(
         "num_pre_ranked": num_pre_ranked,
         "num_scored": num_scored,
         "num_skipped_recent_apply": num_skipped_recent_apply,
+        "num_skipped_recent_flag": num_skipped_recent_flag,
+        "num_skipped_state": num_skipped_state,
+        "num_eligible": len(eligible_job_ids),
         "limit_to_score": limit_to_score,
     }

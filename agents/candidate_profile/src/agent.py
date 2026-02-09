@@ -5,14 +5,14 @@ import uuid
 from typing import Optional, Tuple, Dict, Any
 from pydantic import ValidationError
 
-from src.models import (
+from .models import (
     CandidateProfileRequest,
     CandidateProfileEnvelope,
 )
-from src.llm_client import LLMClient
-from src.prompts import SYSTEM_PROMPT, build_user_prompt, PROMPT_VERSION
-from src.utils import now_utc_iso, clamp, unique_sorted
-from src import db
+from .llm_client import LLMClient
+from .prompts import SYSTEM_PROMPT, build_user_prompt, PROMPT_VERSION
+from .utils import now_utc_iso, clamp, unique_sorted
+from . import db
 
 
 AGENT_NAME = "CandidateProfileAgent"
