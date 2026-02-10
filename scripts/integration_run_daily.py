@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 AGENTS_DIR = ROOT_DIR / "agents"
-SHARED_DB_PATH = (ROOT_DIR / "data" / "app.db").resolve()
+SHARED_DB_PATH = (AGENTS_DIR / "data" / "app.db").resolve()
 if str(AGENTS_DIR) not in sys.path:
     sys.path.insert(0, str(AGENTS_DIR))
 

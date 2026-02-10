@@ -24,6 +24,9 @@ class CandidatePreferences(BaseModel):
     role_targets: List[str] = Field(default_factory=list)
     industries: List[str] = Field(default_factory=list)
     dealbreakers: List[str] = Field(default_factory=list)
+    seniority_preference: List[
+        Literal["junior", "mid_level", "senior", "staff", "executive"]
+    ] = Field(default_factory=list)
     comp_min: Optional[int] = None
     work_auth: Optional[str] = None
 

@@ -4,9 +4,10 @@ import os
 import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+from sqlalchemy import text
 from sqlmodel import SQLModel, Field, Session, select
 
-from db.utils import get_engine, init_db
+from db.utils import get_engine, init_db, ensure_table_column
 
 
 class Candidate(SQLModel, table=True):
@@ -62,6 +63,7 @@ class CandidatePreferences(SQLModel, table=True):
     role_targets: str = "[]"
     industries: str = "[]"
     dealbreakers: str = "[]"
+    seniority_preference: str = "[]"
     comp_min: Optional[int] = None
     work_auth: Optional[str] = None
     updated_at: str
@@ -140,6 +142,7 @@ def save_candidate(
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
+        _ensure_candidate_preferences_schema(session)
         existing = session.get(Candidate, candidate_id)
         if existing:
             existing.resume_raw = resume_raw
@@ -166,6 +169,7 @@ def save_candidate(
             prefs.role_targets = json.dumps(preferences.get("role_targets", []))
             prefs.industries = json.dumps(preferences.get("industries", []))
             prefs.dealbreakers = json.dumps(preferences.get("dealbreakers", []))
+            prefs.seniority_preference = json.dumps(preferences.get("seniority_preference", []))
             prefs.comp_min = preferences.get("comp_min")
             prefs.work_auth = preferences.get("work_auth")
             prefs.updated_at = updated_at
@@ -178,12 +182,30 @@ def save_candidate(
                     role_targets=json.dumps(preferences.get("role_targets", [])),
                     industries=json.dumps(preferences.get("industries", [])),
                     dealbreakers=json.dumps(preferences.get("dealbreakers", [])),
+                    seniority_preference=json.dumps(preferences.get("seniority_preference", [])),
                     comp_min=preferences.get("comp_min"),
                     work_auth=preferences.get("work_auth"),
                     updated_at=updated_at,
                 )
             )
         session.commit()
+
+
+def _ensure_candidate_preferences_schema(session: Session) -> None:
+    """Ensure candidatepreferences table has required columns.
+
+    Args:
+        session: Active SQLModel session.
+
+    Returns:
+        None.
+    """
+    ensure_table_column(
+        session,
+        table_name="candidatepreferences",
+        column_name="seniority_preference",
+        column_definition="TEXT",
+    )
 
 
 def save_agent_run(
@@ -273,4 +295,5 @@ def get_candidate_preferences(candidate_id: str) -> Optional[CandidatePreference
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
+        _ensure_candidate_preferences_schema(session)
         return session.get(CandidatePreferences, candidate_id)

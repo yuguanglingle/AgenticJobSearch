@@ -416,7 +416,7 @@ def get_db_path() -> str:
     """
     db_path = os.getenv("DB_PATH")
     if not db_path:
-        base_dir = Path(__file__).resolve().parents[2]
+        base_dir = Path(__file__).resolve().parents[1]
         db_path = str(base_dir / "data" / "app.db")
     print(f"[job_search.db] DB_PATH={db_path}")
     return db_path

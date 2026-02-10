@@ -24,7 +24,7 @@ Set environment variables:
 
 - `OPENAI_API_KEY` (required)
 - `LLM_MODEL` (optional, default set in code)
-- `DB_PATH` (optional, default `agents/candidate_profile/data/app.db`)
+- `DB_PATH` (optional, default `agents/data/app.db`)
 
 ## Run
 

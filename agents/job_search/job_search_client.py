@@ -36,6 +36,7 @@ load_dotenv()
 
 API_URL = "https://api.theirstack.com/v1/jobs/search"
 USER_AGENT = "JobSearchAgent/0.1 (+https://example.com; contact=research@example.com)"
+DEBUG_THEIRSTACK = os.getenv("THEIRSTACK_DEBUG") == "1"
 
 DEFAULT_CONFIG = {
     "providers": [
@@ -262,6 +263,9 @@ def call_theirstack(api_key: str, payload: dict) -> dict:
     Returns:
         Response JSON dict.
     """
+    if DEBUG_THEIRSTACK:
+        print("[theirstack] request payload:")
+        print(json.dumps(payload, indent=2, ensure_ascii=True))
     response = requests.post(
         API_URL,
         headers={
@@ -300,7 +304,11 @@ def call_theirstack(api_key: str, payload: dict) -> dict:
         print("Response body:")
         print(response.text)
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    if DEBUG_THEIRSTACK:
+        jobs = data.get("data", [])
+        print(f"[theirstack] response jobs={len(jobs)}")
+    return data
 
 
 def map_job(job: dict, source: str) -> dict:

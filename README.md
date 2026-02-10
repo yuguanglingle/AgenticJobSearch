@@ -4,8 +4,8 @@ This repo is organized by agent/component. Each folder under `agents/` contains 
 
 DB_PATH environment variable ⚠️
 
-- The integration scripts and agents use a shared SQLite DB at `data/app.db` by default.
-- If the environment variable `DB_PATH` is *unset or an empty string*, the integration runner will set it to the repository's shared `data/app.db` (to avoid accidental writes to an unintended location).
+- The integration scripts and agents use a shared SQLite DB at `agents/data/app.db` by default.
+- If the environment variable `DB_PATH` is *unset or an empty string*, the integration runner will set it to the repository's shared `agents/data/app.db` (to avoid accidental writes to an unintended location).
 - If you want to use an alternate DB for testing, set `DB_PATH` to an absolute path before running the integration script.
 
 Current components:
