@@ -2,6 +2,8 @@
 
 import json
 import os
+import socket
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -36,13 +38,16 @@ from orchestrator import pipeline, state as orchestrator_state
 load_dotenv(BASE_DIR / ".env")
 load_dotenv(AGENTS_DIR / ".env")
 
-st.set_page_config(page_title="Jobs Review", layout="wide")
-st.title("Jobs Review")
+st.set_page_config(page_title="Agentic Jobs Search", layout="wide")
+st.title("Agentic Jobs Application: Search and Review Your Next Role")
+st.caption(f"Server port: {st.get_option('server.port')}")
 
 if "last_pipeline_stats" not in st.session_state:
     st.session_state.last_pipeline_stats = None
 if "loaded_candidate_id" not in st.session_state:
     st.session_state.loaded_candidate_id = None
+if "last_theirstack_payload" not in st.session_state:
+    st.session_state.last_theirstack_payload = None
 
 # Default options in UI
 if "pref_locations" not in st.session_state:
@@ -240,6 +245,56 @@ provider_config_text = st.text_area(
 limit_to_score = st.number_input("Limit to score", min_value=1, value=50)
 debug_request = st.checkbox("Debug provider request")
 
+st.subheader("Review (standalone)")
+review_port = os.getenv("REVIEW_PORT", "8601")
+review_url_default = f"http://localhost:{review_port}"
+review_url = st.text_input("Review app URL", value=review_url_default)
+st.caption(
+    f"Run: `streamlit run agents/orchestrator/streamlit_review.py --server.port {review_port}`"
+)
+if "8501" in review_url:
+    st.warning("Review URL points to the same port as this app. Run the review app on 8601.")
+
+
+def _is_port_open(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _launch_review_app(port: int) -> None:
+    subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            str(BASE_DIR / "streamlit_review.py"),
+            "--server.port",
+            str(port),
+        ],
+        cwd=str(AGENTS_DIR.parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
+
+
+try:
+    review_port_int = int(review_port)
+except ValueError:
+    review_port_int = 8601
+
+if st.button("Review Your Jobs"):
+    if _is_port_open(review_port_int):
+        st.info(f"Review UI already running on port {review_port_int}.")
+    else:
+        _launch_review_app(review_port_int)
+        st.success("Starting review UI...")
+    st.markdown(f"[Open review UI]({review_url})")
+
 if st.button("Run pipeline"):
     if not candidate_id:
         st.error("Select a candidate before running the pipeline.")
@@ -281,15 +336,21 @@ if st.button("Run pipeline"):
                             provider["payload_overrides"] = overrides
                 if debug_request:
                     os.environ["THEIRSTACK_DEBUG"] = "1"
-                    for provider in provider_config.get("providers", []):
-                        if provider.get("type") != "theirstack":
-                            continue
-                        payload = build_payload()
-                        overrides = provider.get("payload_overrides") or {}
-                        payload.update(overrides)
+                payload = None
+                for provider in provider_config.get("providers", []):
+                    if provider.get("type") != "theirstack":
+                        continue
+                    payload = build_payload()
+                    overrides = provider.get("payload_overrides") or {}
+                    payload.update(overrides)
+                    st.session_state.last_theirstack_payload = payload
+                    if debug_request:
                         st.subheader("Theirstack request payload")
                         st.code(json.dumps(payload, indent=2, ensure_ascii=True), language="json")
-                        print("[ui] theirstack payload overrides:", json.dumps(overrides, ensure_ascii=True))
+                        print(
+                            "[ui] theirstack payload overrides:",
+                            json.dumps(overrides, ensure_ascii=True),
+                        )
                 stats = pipeline.run_daily(
                     candidate_id=candidate_id,
                     provider_config=provider_config,
@@ -318,6 +379,12 @@ if st.session_state.last_pipeline_stats:
         "Scored: "
         f"{stats.get('num_scored', 0)}"
     )
+    if st.session_state.last_theirstack_payload:
+        with st.expander("Last Theirstack request payload"):
+            st.code(
+                json.dumps(st.session_state.last_theirstack_payload, indent=2, ensure_ascii=True),
+                language="json",
+            )
 
 
 st.header("Review")
@@ -364,7 +431,7 @@ else:
                     if st.button("Approve", key=f"approve_{opp.id}"):
                         orchestrator_state.approve(opp.id)
                         st.success("Approved.")
-                        st.experimental_rerun()
+                        st.rerun()
                 with col2:
                     close_reason = st.text_input(
                         "Close reason (optional)",
@@ -374,9 +441,9 @@ else:
                     if st.button("Close", key=f"close_{opp.id}"):
                         orchestrator_state.close(opp.id, reason=close_reason.strip() or None)
                         st.success("Closed.")
-                        st.experimental_rerun()
+                        st.rerun()
                 with col3:
                     if st.button("Mark Applied", key=f"applied_{opp.id}"):
                         orchestrator_state.mark_applied(opp.id)
                         st.success("Marked applied.")
-                        st.experimental_rerun()
+                        st.rerun()
