@@ -34,6 +34,14 @@ from job_match.state_machine import JobState
 from job_search import db as job_search_db
 from job_search.job_search_client import DEFAULT_CONFIG, build_payload
 from orchestrator import pipeline, state as orchestrator_state
+from orchestrator.theirstack_overrides import (
+    DEFAULT_INDUSTRIES,
+    DEFAULT_LOCATION_PATTERNS,
+    DEFAULT_REMOTE,
+    DEFAULT_ROLE_TARGETS,
+    DEFAULT_SENIORITY,
+    apply_theirstack_overrides,
+)
 
 load_dotenv(BASE_DIR / ".env")
 load_dotenv(AGENTS_DIR / ".env")
@@ -49,17 +57,17 @@ if "loaded_candidate_id" not in st.session_state:
 if "last_theirstack_payload" not in st.session_state:
     st.session_state.last_theirstack_payload = None
 
-# Default options in UI
+# Default options in UI (seeded from TheirStack payload defaults).
 if "pref_locations" not in st.session_state:
-    st.session_state.pref_locations = "San Francisco Bay Area"
+    st.session_state.pref_locations = ", ".join(DEFAULT_LOCATION_PATTERNS)
 if "pref_remote_preference" not in st.session_state:
-    st.session_state.pref_remote_preference = "any"
+    st.session_state.pref_remote_preference = DEFAULT_REMOTE or "any"
 if "pref_role_targets" not in st.session_state:
-    st.session_state.pref_role_targets = "Corporate development, Strategy, Venture"
+    st.session_state.pref_role_targets = ", ".join(DEFAULT_ROLE_TARGETS)
 if "pref_industries" not in st.session_state:
-    st.session_state.pref_industries = ""
+    st.session_state.pref_industries = ", ".join(DEFAULT_INDUSTRIES)
 if "pref_seniority" not in st.session_state:
-    st.session_state.pref_seniority = ["mid_level"]
+    st.session_state.pref_seniority = list(DEFAULT_SENIORITY)
 
 
 def _load_candidates() -> list[str]:
@@ -113,11 +121,94 @@ def _bucket_rank(bucket: Optional[str]) -> int:
     return order.get(bucket or "", 99)
 
 
+def _reset_pref_state() -> None:
+    for key in [
+        "pref_locations",
+        "pref_remote_preference",
+        "pref_role_targets",
+        "pref_industries",
+        "pref_seniority",
+    ]:
+        st.session_state.pop(key, None)
+
+
+def _apply_default_prefs() -> None:
+    st.session_state.pref_locations = ", ".join(DEFAULT_LOCATION_PATTERNS)
+    st.session_state.pref_remote_preference = DEFAULT_REMOTE or "any"
+    st.session_state.pref_role_targets = ", ".join(DEFAULT_ROLE_TARGETS)
+    st.session_state.pref_industries = ", ".join(DEFAULT_INDUSTRIES)
+    st.session_state.pref_seniority = list(DEFAULT_SENIORITY)
+
+
+def _apply_saved_prefs(candidate_id: str) -> None:
+    prefs = candidate_db.get_candidate_preferences(candidate_id)
+    candidate = candidate_db.get_candidate(candidate_id)
+    if prefs:
+        try:
+            pref_locations = ", ".join(json.loads(prefs.locations or "[]"))
+        except json.JSONDecodeError:
+            pref_locations = ", ".join(DEFAULT_LOCATION_PATTERNS)
+        try:
+            pref_role_targets = ", ".join(json.loads(prefs.role_targets or "[]"))
+        except json.JSONDecodeError:
+            pref_role_targets = ", ".join(DEFAULT_ROLE_TARGETS)
+        try:
+            pref_industries = ", ".join(json.loads(prefs.industries or "[]"))
+        except json.JSONDecodeError:
+            pref_industries = ", ".join(DEFAULT_INDUSTRIES)
+        st.session_state.pref_locations = pref_locations or ", ".join(DEFAULT_LOCATION_PATTERNS)
+        st.session_state.pref_remote_preference = prefs.remote_preference or DEFAULT_REMOTE or "any"
+        st.session_state.pref_role_targets = pref_role_targets or ", ".join(DEFAULT_ROLE_TARGETS)
+        st.session_state.pref_industries = pref_industries or ", ".join(DEFAULT_INDUSTRIES)
+        if prefs.seniority_preference:
+            try:
+                seniority_list = json.loads(prefs.seniority_preference or "[]")
+            except json.JSONDecodeError:
+                seniority_list = [prefs.seniority_preference]
+            st.session_state.pref_seniority = seniority_list
+        else:
+            st.session_state.pref_seniority = list(DEFAULT_SENIORITY)
+    if candidate and not st.session_state.pref_seniority:
+        try:
+            payload = json.loads(candidate.candidate_profile_json)
+            estimate = payload.get("result", {}).get("candidate_profile", {}).get("seniority_estimate")
+        except json.JSONDecodeError:
+            estimate = None
+        seniority_map = {
+            "junior": "junior",
+            "mid": "mid_level",
+            "mid_level": "mid_level",
+            "senior": "senior",
+            "staff": "staff",
+        }
+        mapped = seniority_map.get(estimate)
+        if mapped:
+            st.session_state.pref_seniority = [mapped]
+
+
 st.header("Candidate")
 
 candidates = _load_candidates()
 selected = st.selectbox("Candidate ID", options=["(new)"] + candidates)
 candidate_id = None if selected == "(new)" else selected
+if "use_saved_prefs" not in st.session_state:
+    st.session_state.use_saved_prefs = False
+
+
+def _on_saved_prefs_toggle() -> None:
+    if candidate_id:
+        _reset_pref_state()
+        _apply_default_prefs()
+        if st.session_state.use_saved_prefs:
+            _apply_saved_prefs(candidate_id)
+
+
+use_saved_prefs = st.checkbox(
+    "Use saved candidate preferences",
+    value=st.session_state.use_saved_prefs,
+    key="use_saved_prefs",
+    on_change=_on_saved_prefs_toggle,
+)
 
 new_candidate_id = None
 if selected == "(new)":
@@ -127,53 +218,10 @@ if selected == "(new)":
         st.session_state.loaded_candidate_id = None
 else:
     if st.session_state.loaded_candidate_id != candidate_id:
-        prefs = candidate_db.get_candidate_preferences(candidate_id)
-        candidate = candidate_db.get_candidate(candidate_id)
-        if prefs:
-            try:
-                pref_locations = ", ".join(json.loads(prefs.locations or "[]"))
-            except json.JSONDecodeError:
-                pref_locations = st.session_state.pref_locations
-            try:
-                pref_role_targets = ", ".join(json.loads(prefs.role_targets or "[]"))
-            except json.JSONDecodeError:
-                pref_role_targets = st.session_state.pref_role_targets
-            try:
-                pref_industries = ", ".join(json.loads(prefs.industries or "[]"))
-            except json.JSONDecodeError:
-                pref_industries = st.session_state.pref_industries
-            st.session_state.pref_locations = pref_locations or st.session_state.pref_locations
-            st.session_state.pref_remote_preference = (
-                prefs.remote_preference or st.session_state.pref_remote_preference
-            )
-            st.session_state.pref_role_targets = pref_role_targets or st.session_state.pref_role_targets
-            st.session_state.pref_industries = pref_industries or st.session_state.pref_industries
-            if prefs.seniority_preference:
-                try:
-                    seniority_list = json.loads(prefs.seniority_preference or "[]")
-                except json.JSONDecodeError:
-                    seniority_list = [prefs.seniority_preference]
-                st.session_state.pref_seniority = seniority_list
-        if candidate and not st.session_state.pref_seniority:
-            try:
-                payload = json.loads(candidate.candidate_profile_json)
-                estimate = (
-                    payload.get("result", {})
-                    .get("candidate_profile", {})
-                    .get("seniority_estimate")
-                )
-            except json.JSONDecodeError:
-                estimate = None
-            seniority_map = {
-                "junior": "junior",
-                "mid": "mid_level",
-                "mid_level": "mid_level",
-                "senior": "senior",
-                "staff": "staff",
-            }
-            mapped = seniority_map.get(estimate)
-            if mapped:
-                st.session_state.pref_seniority = [mapped]
+        _reset_pref_state()
+        _apply_default_prefs()
+        if use_saved_prefs:
+            _apply_saved_prefs(candidate_id)
         st.session_state.loaded_candidate_id = candidate_id
 
 with st.expander("Resume (optional)"):
@@ -305,35 +353,11 @@ if st.button("Run pipeline"):
             st.error(f"Invalid JSON: {exc}")
         else:
             try:
-                if isinstance(provider_config.get("providers"), list):
-                    normalized = []
-                    for provider in provider_config["providers"]:
-                        if isinstance(provider, str):
-                            normalized.append(
-                                {
-                                    "name": provider,
-                                    "type": provider,
-                                    "enabled": True,
-                                    "api_key_env": "THEIRSTACK_API_KEY",
-                                    "payload_overrides": {},
-                                }
-                            )
-                        else:
-                            normalized.append(provider)
-                    provider_config["providers"] = normalized
-                role_targets_list = [item.strip() for item in role_targets.split(",") if item.strip()]
-                if role_targets_list:
-                    for provider in provider_config.get("providers", []):
-                        if provider.get("type") == "theirstack":
-                            overrides = provider.get("payload_overrides") or {}
-                            overrides["job_title_or"] = role_targets_list
-                            provider["payload_overrides"] = overrides
-                if seniority:
-                    for provider in provider_config.get("providers", []):
-                        if provider.get("type") == "theirstack":
-                            overrides = provider.get("payload_overrides") or {}
-                            overrides["job_seniority_or"] = seniority
-                            provider["payload_overrides"] = overrides
+                provider_config = apply_theirstack_overrides(
+                    provider_config=provider_config,
+                    role_targets=role_targets,
+                    seniority=seniority,
+                )
                 if debug_request:
                     os.environ["THEIRSTACK_DEBUG"] = "1"
                 payload = None
