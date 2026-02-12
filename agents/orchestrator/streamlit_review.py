@@ -89,6 +89,16 @@ def _state_rank(state: str) -> int:
     return order.get(state, 99)
 
 
+def _status_color(state: Optional[str]) -> str:
+    if state == JobState.APPROVED.value:
+        return "#2B6CB0"  # blue
+    if state == JobState.APPLIED.value:
+        return "#2F855A"  # green
+    if state == JobState.CLOSED.value:
+        return "#D69E2E"  # yellow
+    return "#718096"  # gray
+
+
 st.header("Candidate")
 candidate_options = _load_candidates()
 selected = st.selectbox("Candidate ID", options=["(select)"] + candidate_options)
@@ -138,13 +148,20 @@ for opp in opps:
     title = job.job_title if job else "Unknown role"
     company = job.company if job else "Unknown company"
     header = f"{company} - {title}"
-    with st.expander(header, expanded=False):
-        st.write(f"State: {opp.state}")
+    color = _status_color(opp.state)
+    st.markdown(
+        f"<div style='background-color:{color};"
+        "color:white;padding:10px 12px;border-radius:8px;"
+        "margin:8px 0 6px 0;font-weight:600;'>"
+        f"{header} — Status: {opp.state}</div>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("Details", expanded=False):
         st.write(f"Score: {opp.fit_score}")
         st.write(f"Decision: {opp.fit_decision}")
         st.write(f"Bucket: {opp.screen_bucket}")
-        if opp.skip_reason:
-            st.write(f"Skip reason: {opp.skip_reason}")
+        if opp.state == JobState.CLOSED.value:
+            st.write(f"Close reason: {opp.skip_reason or 'N/A'}")
         if job:
             st.write(f"Location: {job.location or 'N/A'}")
             st.write(f"URL: {job.canonical_url or job.url or 'N/A'}")
