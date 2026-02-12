@@ -23,14 +23,17 @@ DEFAULT_INDUSTRIES = [
 
 
 def parse_csv(value: str) -> list[str]:
+    """Split a comma-separated string into a list of trimmed values."""
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def same_items(left: list[str], right: list[str]) -> bool:
+    """Return True when two lists contain the same items, order-insensitive."""
     return set(left) == set(right)
 
 
 def normalize_provider_config(provider_config: dict) -> dict:
+    """Normalize provider configs to dict entries with defaults applied."""
     config = deepcopy(provider_config)
     providers = config.get("providers")
     if isinstance(providers, list):
@@ -55,6 +58,7 @@ def normalize_provider_config(provider_config: dict) -> dict:
 def apply_theirstack_overrides(
     *, provider_config: dict, role_targets: str, seniority: list[str]
 ) -> dict:
+    """Apply UI-driven overrides to TheirStack providers when values differ from defaults."""
     config = normalize_provider_config(provider_config)
     role_targets_list = parse_csv(role_targets)
     if role_targets_list and not same_items(role_targets_list, DEFAULT_ROLE_TARGETS):
