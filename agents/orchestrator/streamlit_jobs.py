@@ -94,14 +94,15 @@ def _latest_fit_evaluations(candidate_id: str, job_ids: list[str]) -> dict[str, 
     return latest
 
 
-def _load_screened_opportunities(candidate_id: str) -> list[job_match_db.JobOpportunity]:
+def _load_opportunities(candidate_id: str, states: Optional[list[str]] = None) -> list[job_match_db.JobOpportunity]:
     db_path = job_match_db.get_db_path()
     engine = job_match_db.init_db(db_path)
     with Session(engine) as session:
         stmt = select(job_match_db.JobOpportunity).where(
             job_match_db.JobOpportunity.candidate_id == candidate_id,
-            job_match_db.JobOpportunity.state == JobState.SCREENED.value,
         )
+        if states:
+            stmt = stmt.where(job_match_db.JobOpportunity.state.in_(states))
         return list(session.exec(stmt))
 
 
@@ -119,6 +120,17 @@ def _load_jobs(job_ids: list[str]) -> dict[str, job_search_db.Job]:
 def _bucket_rank(bucket: Optional[str]) -> int:
     order = {"recommended": 0, "borderline": 1, "low_match": 2}
     return order.get(bucket or "", 99)
+
+
+def _state_rank(state: Optional[str]) -> int:
+    order = {
+        JobState.SCREENED.value: 0,
+        JobState.APPROVED.value: 1,
+        JobState.APPLIED.value: 2,
+        JobState.DISCOVERED.value: 3,
+        JobState.CLOSED.value: 4,
+    }
+    return order.get(state or "", 99)
 
 
 def _reset_pref_state() -> None:
@@ -426,18 +438,18 @@ st.header("Review")
 if not candidate_id:
     st.info("Select a candidate to review screened opportunities.")
 else:
-    screened = _load_screened_opportunities(candidate_id)
-    if not screened:
+    opportunities = _load_opportunities(candidate_id)
+    if not opportunities:
         st.info("No screened opportunities yet.")
     else:
-        screened.sort(
-            key=lambda opp: (_bucket_rank(opp.screen_bucket), -(opp.fit_score or -1))
+        opportunities.sort(
+            key=lambda opp: (_state_rank(opp.state), _bucket_rank(opp.screen_bucket), -(opp.fit_score or -1))
         )
-        job_ids = [opp.job_id for opp in screened]
+        job_ids = [opp.job_id for opp in opportunities]
         jobs = _load_jobs(job_ids)
         evaluations = _latest_fit_evaluations(candidate_id, job_ids)
 
-        for opp in screened:
+        for opp in opportunities:
             job = jobs.get(opp.job_id)
             evaluation = evaluations.get(opp.job_id)
             title = job.job_title if job else "Unknown role"
@@ -451,12 +463,12 @@ else:
                 f"{header} — Status: {opp.state}</div>",
                 unsafe_allow_html=True,
             )
-            with st.expander("Details", expanded=False):
+            with st.expander(header, expanded=False):
                 if job:
                     st.write(f"Location: {job.location or 'N/A'}")
                     st.write(f"URL: {job.canonical_url or job.url or 'N/A'}")
-                if opp.state == JobState.CLOSED.value:
-                    st.write(f"Close reason: {opp.skip_reason or 'N/A'}")
+                if opp.skip_reason:
+                    st.write(f"Close reason: {opp.skip_reason}")
                 st.write(f"Score: {opp.fit_score}")
                 st.write(f"Decision: {opp.fit_decision}")
                 st.write(f"Bucket: {opp.screen_bucket}")

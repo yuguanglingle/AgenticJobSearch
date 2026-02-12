@@ -156,12 +156,12 @@ for opp in opps:
         f"{header} — Status: {opp.state}</div>",
         unsafe_allow_html=True,
     )
-    with st.expander("Details", expanded=False):
+    with st.expander(header, expanded=False):
         st.write(f"Score: {opp.fit_score}")
         st.write(f"Decision: {opp.fit_decision}")
         st.write(f"Bucket: {opp.screen_bucket}")
-        if opp.state == JobState.CLOSED.value:
-            st.write(f"Close reason: {opp.skip_reason or 'N/A'}")
+        if opp.skip_reason:
+            st.write(f"Close reason: {opp.skip_reason}")
         if job:
             st.write(f"Location: {job.location or 'N/A'}")
             st.write(f"URL: {job.canonical_url or job.url or 'N/A'}")
