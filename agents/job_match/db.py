@@ -8,7 +8,7 @@ from uuid import uuid4
 from sqlmodel import SQLModel, Field, Session, select
 
 from job_match.state_machine import JobState, ensure_transition, next_action_for_state
-from db.utils import init_db
+from db.utils import init_db, ensure_table_column
 
 
 class JobOpportunity(SQLModel, table=True):
@@ -25,6 +25,7 @@ class JobOpportunity(SQLModel, table=True):
     last_state_changed_at: str
     is_skipped_recently_applied: bool = False
     skip_reason: Optional[str] = None
+    last_scored_description_hash: Optional[str] = None
 
 
 class JobFitEvaluation(SQLModel, table=True):
@@ -81,6 +82,23 @@ def get_db_path() -> str:
     return db_path
 
 
+def _ensure_job_opportunity_schema(session: Session) -> None:
+    """Ensure jobopportunity table has required columns.
+
+    Args:
+        session: Active SQLModel session.
+
+    Returns:
+        None.
+    """
+    ensure_table_column(
+        session,
+        table_name="jobopportunity",
+        column_name="last_scored_description_hash",
+        column_definition="TEXT",
+    )
+
+
 def get_or_create_opportunity(candidate_id: str, job_id: str) -> JobOpportunity:
     """Get or create a JobOpportunity for candidate/job.
 
@@ -94,6 +112,7 @@ def get_or_create_opportunity(candidate_id: str, job_id: str) -> JobOpportunity:
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
+        _ensure_job_opportunity_schema(session)
         stmt = select(JobOpportunity).where(
             JobOpportunity.candidate_id == candidate_id,
             JobOpportunity.job_id == job_id,
@@ -136,6 +155,7 @@ def update_opportunity_state(opportunity_id: str, new_state: JobState) -> JobOpp
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
+        _ensure_job_opportunity_schema(session)
         opportunity = session.get(JobOpportunity, opportunity_id)
         if not opportunity:
             raise ValueError("Opportunity not found.")
@@ -158,6 +178,7 @@ def set_opportunity_scored(
     decision: str,
     screen_bucket: str,
     scored_at: Optional[str] = None,
+    description_hash: Optional[str] = None,
 ) -> JobOpportunity:
     """Persist scoring results and move opportunity to SCREENED.
 
@@ -174,6 +195,7 @@ def set_opportunity_scored(
     db_path = get_db_path()
     engine = init_db(db_path)
     with Session(engine) as session:
+        _ensure_job_opportunity_schema(session)
         opportunity = session.get(JobOpportunity, opportunity_id)
         if not opportunity:
             raise ValueError("Opportunity not found.")
@@ -187,6 +209,8 @@ def set_opportunity_scored(
         opportunity.fit_decision = decision
         opportunity.screen_bucket = screen_bucket
         opportunity.last_scored_at = scored_at or utc_now()
+        if description_hash:
+            opportunity.last_scored_description_hash = description_hash
         session.add(opportunity)
         session.commit()
         session.refresh(opportunity)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlmodel import Session, select
@@ -19,6 +20,8 @@ from orchestrator import state as orchestrator_state
 
 
 LLM_SCORE_THRESHOLD = 0.25
+RESCORE_LOOKBACK_DAYS = 7
+RESCORE_RECENT_DIFF_DAYS = 3
 
 
 @dataclass
@@ -176,6 +179,35 @@ def _bucket_from_score(score: int) -> str:
     return "low_match"
 
 
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _should_skip_rescore(
+    opportunity: job_match_db.JobOpportunity,
+    job_record: job_search_db.Job,
+    *,
+    days: int = RESCORE_LOOKBACK_DAYS,
+    recent_diff_days: int = RESCORE_RECENT_DIFF_DAYS,
+) -> bool:
+    last_scored_at = _parse_iso_datetime(opportunity.last_scored_at)
+    if not last_scored_at:
+        return False
+    if not job_record.description_hash or not opportunity.last_scored_description_hash:
+        return False
+    if opportunity.last_scored_description_hash == job_record.description_hash:
+        return True
+    recent_cutoff = datetime.now(timezone.utc) - timedelta(days=recent_diff_days)
+    if last_scored_at >= recent_cutoff:
+        return True
+    return False
+
+
 def _pre_rank_discovered(candidate_id: str, job_ids: list[str]) -> list[PreRankedOpportunity]:
     """Score DISCOVERED opportunities with the heuristic pre-ranker.
 
@@ -319,6 +351,10 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
             except Exception as e:
                 print(f"[pipeline] score: could not close opportunity {item.opportunity_id} {e}")
             continue
+        opportunity = orchestrator_state.get_or_create_opportunity(candidate_id, item.job_id)
+        if _should_skip_rescore(opportunity, job_record):
+            print(f"[pipeline] skip rescore job_id={item.job_id} reason=recent_scored")
+            continue
         # Skip jobs that were applied to recently.
         if job_match_db.should_skip_recently_applied(
             candidate_id,
@@ -350,6 +386,7 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
             gaps=result.gaps,
             dealbreakers_triggered=result.dealbreakers_triggered,
             model=getattr(llm_client, "model", None) if item.score >= LLM_SCORE_THRESHOLD else None,
+            description_hash=job_record.description_hash,
         )
         num_scored += 1
 
@@ -441,6 +478,10 @@ def run_daily_from_batch(
             except Exception as e:
                 print(f"[pipeline] score: could not close opportunity {item.opportunity_id} {e}")
             continue
+        opportunity = orchestrator_state.get_or_create_opportunity(candidate_id, item.job_id)
+        if _should_skip_rescore(opportunity, job_record):
+            print(f"[pipeline] skip rescore job_id={item.job_id} reason=recent_scored")
+            continue
         if job_match_db.should_skip_recently_applied(
             candidate_id,
             dedupe_key_strong=job_record.dedupe_key_strong,
@@ -472,6 +513,7 @@ def run_daily_from_batch(
             model=getattr(effective_llm_client, "model", None)
             if item.score >= LLM_SCORE_THRESHOLD
             else None,
+            description_hash=job_record.description_hash,
         )
         num_scored += 1
 

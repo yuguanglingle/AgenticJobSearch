@@ -38,6 +38,7 @@ def apply_fit_result(
     model: Optional[str] = None,
     raw_response: Optional[str] = None,
     scored_at: Optional[str] = None,
+    description_hash: Optional[str] = None,
 ) -> job_match_db.JobOpportunity:
     """Persist a fit result and mark opportunity as SCREENED.
 
@@ -74,12 +75,20 @@ def apply_fit_result(
         model=model,
         raw_response=raw_response,
     )
+    if not description_hash:
+        db_path = job_search_db.get_db_path()
+        engine = job_search_db.init_db(db_path)
+        with Session(engine) as job_session:
+            job = job_session.get(job_search_db.Job, job_id)
+            if job:
+                description_hash = job.description_hash
     return job_match_db.set_opportunity_scored(
         opportunity.id,
         score=score,
         decision=decision,
         screen_bucket=bucket,
         scored_at=scored_at,
+        description_hash=description_hash,
     )
 
 
