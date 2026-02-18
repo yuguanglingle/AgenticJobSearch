@@ -188,6 +188,20 @@ def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _write_status_json(status: dict) -> None:
+    """Best-effort write of pipeline status to logs/status.json."""
+    import json
+
+    logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "logs"))
+    try:
+        os.makedirs(logs_dir, exist_ok=True)
+        status_path = os.path.join(logs_dir, "status.json")
+        with open(status_path, "w", encoding="utf-8") as handle:
+            json.dump(status, handle, indent=2)
+    except Exception as exc:
+        print(f"[pipeline] warning: failed to write status.json: {exc}")
+
+
 def _should_skip_rescore(
     opportunity: job_match_db.JobOpportunity,
     job_record: job_search_db.Job,
@@ -406,6 +420,15 @@ def run_daily(candidate_id: str, provider_config: dict, limit_to_score: int = 50
         "num_eligible": len(eligible_job_ids),
         "limit_to_score": limit_to_score,
     }
+    status = {
+        "last_run": datetime.now().isoformat(),
+        "status": "SUCCESS",
+        "jobs_pulled": len(job_ids),
+        "candidate_id": candidate_id,
+        "batch_id": batch_id,
+        "stats": stats,
+    }
+    _write_status_json(status)
     return stats
 
 
@@ -518,7 +541,7 @@ def run_daily_from_batch(
         num_scored += 1
 
     print("[pipeline] step 4: return stats")
-    return {
+    stats = {
         "candidate_id": candidate_id,
         "batch_id": batch_id,
         "num_new_jobs": batch_meta["stats"]["jobs_new"] if batch_meta else 0,
@@ -532,3 +555,12 @@ def run_daily_from_batch(
         "num_eligible": len(eligible_job_ids),
         "limit_to_score": limit_to_score,
     }
+    status = {
+        "last_run": datetime.now().isoformat(),
+        "status": "SUCCESS",
+        "jobs_pulled": len(job_ids),
+        "candidate_id": candidate_id,
+        "batch_id": batch_id,
+    }
+    _write_status_json(status)
+    return stats
