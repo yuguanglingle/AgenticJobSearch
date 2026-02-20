@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+from uuid import uuid4
 from pathlib import Path
 from typing import Optional
 
@@ -14,14 +15,126 @@ from sqlmodel import Session, select
 
 BASE_DIR = Path(__file__).resolve().parent
 AGENTS_DIR = BASE_DIR.parent
+ROOT_DIR = AGENTS_DIR.parent
 if str(AGENTS_DIR) not in sys.path:
     sys.path.insert(0, str(AGENTS_DIR))
+
+from orchestrator.profile_config import (
+    apply_profile_env,
+    get_default_profile,
+    list_profiles,
+    load_profile_config,
+    resolve_db_path,
+    resolve_logs_dir,
+    save_profile_config,
+    set_default_profile,
+)
+from job_search.job_search_client import DEFAULT_CONFIG, build_payload
+
+load_dotenv(BASE_DIR / ".env")
+load_dotenv(AGENTS_DIR / ".env")
+
+st.set_page_config(page_title="Agentic Jobs Search", layout="wide")
+st.title("Agentic Jobs Application: Search and Review Your Next Role")
+st.caption(f"Server port: {st.get_option('server.port')}")
+
+st.header("Profile")
+profiles = list_profiles()
+default_profile = get_default_profile()
+profile_options = ["(none)"] + profiles
+if "selected_profile" not in st.session_state:
+    st.session_state.selected_profile = default_profile or "(none)"
+if st.session_state.selected_profile not in profile_options:
+    st.session_state.selected_profile = "(none)"
+if "pending_profile" in st.session_state:
+    pending = st.session_state.pop("pending_profile")
+    if pending in profile_options:
+        st.session_state.selected_profile = pending
+
+selected_profile = st.selectbox(
+    "Active profile",
+    options=profile_options,
+    index=profile_options.index(st.session_state.selected_profile)
+    if st.session_state.selected_profile in profile_options
+    else 0,
+    key="selected_profile",
+)
+
+profile_config: dict = {}
+if selected_profile != "(none)":
+    try:
+        profile_config = load_profile_config(selected_profile)
+        db_path, logs_dir = apply_profile_env(selected_profile, profile_config)
+        st.caption(f"DB: {db_path}")
+        st.caption(f"Logs: {logs_dir}")
+    except Exception as exc:
+        st.error(f"Failed to load profile {selected_profile}: {exc}")
+        profile_config = {}
+
+if selected_profile != "(none)":
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Set as default"):
+            set_default_profile(selected_profile)
+            st.success(f"Default profile set to {selected_profile}.")
+            st.rerun()
+    with col_b:
+        if default_profile:
+            st.caption(f"Current default: {default_profile}")
+        else:
+            st.caption("No default profile set.")
+else:
+    st.info("No profile selected. Create or choose a profile to isolate data and logs.")
+
+with st.expander("Create or Update Profile"):
+    name_default = selected_profile if selected_profile != "(none)" else ""
+    profile_name = st.text_input("Profile name", value=name_default)
+    existing_config = profile_config if profile_name == selected_profile else {}
+
+    db_default = resolve_db_path(profile_name or "default", existing_config)
+    logs_default = resolve_logs_dir(profile_name or "default", existing_config)
+
+    limit_default = int(existing_config.get("limit_to_score", 50))
+    limit_to_score_input = st.number_input("Limit to score (default)", min_value=1, value=limit_default)
+    db_path_input = st.text_input("DB path", value=str(db_default))
+    logs_dir_input = st.text_input("Logs dir", value=str(logs_default))
+    provider_config_input = st.text_area(
+        "Provider config (JSON)",
+        value=json.dumps(existing_config.get("provider_config") or DEFAULT_CONFIG, indent=2),
+        height=160,
+    )
+    set_default = st.checkbox("Set as default after save", value=False)
+
+    if st.button("Save profile"):
+        if not profile_name.strip():
+            st.error("Profile name is required.")
+        else:
+            try:
+                provider_config = json.loads(provider_config_input)
+            except json.JSONDecodeError as exc:
+                st.error(f"Invalid provider config JSON: {exc}")
+            else:
+                new_config = {
+                    "limit_to_score": int(limit_to_score_input),
+                    "provider_config": provider_config,
+                    "db_path": db_path_input.strip(),
+                    "logs_dir": logs_dir_input.strip(),
+                }
+                save_profile_config(profile_name.strip(), new_config)
+                if set_default:
+                    set_default_profile(profile_name.strip())
+                st.success(f"Profile saved: {profile_name.strip()}")
+                st.session_state.pending_profile = profile_name.strip()
+                st.rerun()
+
 if not os.getenv("DB_PATH"):
     os.environ["DB_PATH"] = str(AGENTS_DIR / "data" / "app.db")
+    st.info("Using legacy DB at agents/data/app.db. Create/select a profile to isolate data.")
+
 if "legacy_db_warned" not in st.session_state:
     st.session_state.legacy_db_warned = False
 
-legacy_db = AGENTS_DIR.parent / "data" / "app.db"
+legacy_db = AGENTS_DIR / "data" / "app.db"
 if legacy_db.exists() and not st.session_state.legacy_db_warned:
     st.warning(f"Legacy DB detected at {legacy_db}. Current DB is {os.environ.get('DB_PATH')}.")
     st.session_state.legacy_db_warned = True
@@ -32,7 +145,6 @@ from candidate_profile.src.models import CandidateProfileRequest, CandidatePrefe
 from job_match import db as job_match_db
 from job_match.state_machine import JobState
 from job_search import db as job_search_db
-from job_search.job_search_client import DEFAULT_CONFIG, build_payload
 from orchestrator import pipeline, state as orchestrator_state
 from orchestrator.theirstack_overrides import (
     DEFAULT_INDUSTRIES,
@@ -42,13 +154,6 @@ from orchestrator.theirstack_overrides import (
     DEFAULT_SENIORITY,
     apply_theirstack_overrides,
 )
-
-load_dotenv(BASE_DIR / ".env")
-load_dotenv(AGENTS_DIR / ".env")
-
-st.set_page_config(page_title="Agentic Jobs Search", layout="wide")
-st.title("Agentic Jobs Application: Search and Review Your Next Role")
-st.caption(f"Server port: {st.get_option('server.port')}")
 
 if "last_pipeline_stats" not in st.session_state:
     st.session_state.last_pipeline_stats = None
@@ -232,10 +337,12 @@ use_saved_prefs = st.checkbox(
     on_change=_on_saved_prefs_toggle,
 )
 
-new_candidate_id = None
 if selected == "(new)":
-    new_candidate_id = st.text_input("New Candidate ID", value="")
-    candidate_id = new_candidate_id.strip() or None
+    if st.button("Create new candidate"):
+        st.session_state.new_candidate_id = str(uuid4())
+    candidate_id = st.session_state.get("new_candidate_id")
+    if candidate_id:
+        st.caption(f"New candidate id: {candidate_id}")
     if st.session_state.loaded_candidate_id is not None:
         st.session_state.loaded_candidate_id = None
 else:
@@ -307,11 +414,6 @@ if st.button("Generate/Update Profile"):
 
 st.header("Pipeline")
 
-provider_config_text = st.text_area(
-    "Provider config (JSON)",
-    value=json.dumps(DEFAULT_CONFIG, indent=2),
-    height=150,
-)
 limit_to_score = st.number_input("Limit to score", min_value=1, value=50)
 debug_request = st.checkbox("Debug provider request")
 
@@ -370,43 +472,39 @@ if st.button("Run pipeline"):
         st.error("Select a candidate before running the pipeline.")
     else:
         try:
-            provider_config = json.loads(provider_config_text)
-        except json.JSONDecodeError as exc:
-            st.error(f"Invalid JSON: {exc}")
-        else:
-            try:
-                provider_config = apply_theirstack_overrides(
-                    provider_config=provider_config,
-                    role_targets=role_targets,
-                    seniority=seniority,
-                )
+            provider_config = profile_config.get("provider_config") or DEFAULT_CONFIG
+            provider_config = apply_theirstack_overrides(
+                provider_config=provider_config,
+                role_targets=role_targets,
+                seniority=seniority,
+            )
+            if debug_request:
+                os.environ["THEIRSTACK_DEBUG"] = "1"
+            payload = None
+            for provider in provider_config.get("providers", []):
+                if provider.get("type") != "theirstack":
+                    continue
+                payload = build_payload()
+                overrides = provider.get("payload_overrides") or {}
+                payload.update(overrides)
+                st.session_state.last_theirstack_payload = payload
                 if debug_request:
-                    os.environ["THEIRSTACK_DEBUG"] = "1"
-                payload = None
-                for provider in provider_config.get("providers", []):
-                    if provider.get("type") != "theirstack":
-                        continue
-                    payload = build_payload()
-                    overrides = provider.get("payload_overrides") or {}
-                    payload.update(overrides)
-                    st.session_state.last_theirstack_payload = payload
-                    if debug_request:
-                        st.subheader("Theirstack request payload")
-                        st.code(json.dumps(payload, indent=2, ensure_ascii=True), language="json")
-                        print(
-                            "[ui] theirstack payload overrides:",
-                            json.dumps(overrides, ensure_ascii=True),
-                        )
-                stats = pipeline.run_daily(
-                    candidate_id=candidate_id,
-                    provider_config=provider_config,
-                    limit_to_score=int(limit_to_score),
-                )
-                st.success("Pipeline run complete.")
-                st.json(stats)
-                st.session_state.last_pipeline_stats = stats
-            except Exception as exc:
-                st.error(f"Pipeline failed: {exc}")
+                    st.subheader("Theirstack request payload")
+                    st.code(json.dumps(payload, indent=2, ensure_ascii=True), language="json")
+                    print(
+                        "[ui] theirstack payload overrides:",
+                        json.dumps(overrides, ensure_ascii=True),
+                    )
+            stats = pipeline.run_daily(
+                candidate_id=candidate_id,
+                provider_config=provider_config,
+                limit_to_score=int(limit_to_score),
+            )
+            st.success("Pipeline run complete.")
+            st.json(stats)
+            st.session_state.last_pipeline_stats = stats
+        except Exception as exc:
+            st.error(f"Pipeline failed: {exc}")
 
 if st.session_state.last_pipeline_stats:
     stats = st.session_state.last_pipeline_stats

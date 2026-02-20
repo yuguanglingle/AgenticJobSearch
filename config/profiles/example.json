@@ -1,0 +1,20 @@
+{
+  "candidate_id": "456cbd62-d833-4f4e-95d1-3ff1b3c0922a",
+  "limit_to_score": 30,
+  "provider_config": {
+    "providers": [
+      {
+        "name": "theirstack",
+        "type": "theirstack",
+        "enabled": true,
+        "api_key_env": "THEIRSTACK_API_KEY",
+        "payload_overrides": {
+          "limit": 25,
+          "job_title_or": ["Corp Strategy", "Corp Development", "Business Development", "Strategy", "Product Strategy", "Venture"]
+        }
+      }
+    ]
+  },
+  "db_path": "agents/data/app.db",
+  "logs_dir": "logs/example"
+}

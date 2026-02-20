@@ -1,0 +1,17 @@
+{
+  "candidate_id": "2de51dfd-3c47-4d7e-882f-a1bccbb05bd9",
+  "limit_to_score": 50,
+  "provider_config": {
+    "providers": [
+      {
+        "name": "theirstack",
+        "type": "theirstack",
+        "enabled": true,
+        "api_key_env": "THEIRSTACK_API_KEY",
+        "payload_overrides": {}
+      }
+    ]
+  },
+  "db_path": "C:\\Users\\yugua\\Projects\\AgenticJobSearch\\data\\jobs_lingle-test.db",
+  "logs_dir": "C:\\Users\\yugua\\Projects\\AgenticJobSearch\\logs\\lingle-test"
+}

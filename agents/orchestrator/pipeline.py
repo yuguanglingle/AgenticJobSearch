@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
+
+BASE_DIR = Path(__file__).resolve().parent
+AGENTS_DIR = BASE_DIR.parent
+if str(AGENTS_DIR) not in sys.path:
+    sys.path.insert(0, str(AGENTS_DIR))
 
 from sqlmodel import Session, select
 
@@ -17,6 +26,11 @@ from job_match.state_machine import JobState
 from job_search import db as job_search_db
 from job_search.job_search_client import JobSearchClient
 from orchestrator import state as orchestrator_state
+from orchestrator.profile_config import (
+    apply_profile_env,
+    get_default_profile,
+    load_profile_config,
+)
 
 
 LLM_SCORE_THRESHOLD = 0.25
@@ -192,7 +206,11 @@ def _write_status_json(status: dict) -> None:
     """Best-effort write of pipeline status to logs/status.json."""
     import json
 
-    logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "logs"))
+    logs_dir = os.getenv("LOG_DIR")
+    if logs_dir:
+        logs_dir = os.path.abspath(os.path.expanduser(logs_dir))
+    else:
+        logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "logs"))
     try:
         os.makedirs(logs_dir, exist_ok=True)
         status_path = os.path.join(logs_dir, "status.json")
@@ -564,3 +582,100 @@ def run_daily_from_batch(
     }
     _write_status_json(status)
     return stats
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the orchestrator pipeline.")
+    parser.add_argument("--mode", default="daily", help="Run mode (daily).")
+    parser.add_argument("--profile", help="Profile name from config/profiles/<name>.json.")
+    parser.add_argument("--use-default-profile", action="store_true", help="Use config/project.json default.")
+    parser.add_argument("--candidate-id", help="Override candidate id from profile.")
+    parser.add_argument("--limit", type=int, default=50, help="Limit number of jobs to score.")
+    parser.add_argument("--provider-config", help="Provider config JSON file path override.")
+    return parser.parse_args()
+
+
+def _load_provider_config(profile_config: dict, override_path: Optional[str]) -> dict:
+    if override_path:
+        path = Path(override_path).expanduser().resolve()
+        return json.loads(path.read_text(encoding="utf-8"))
+    provider_config = profile_config.get("provider_config")
+    if provider_config:
+        return provider_config
+    if "providers" in profile_config:
+        return {"providers": profile_config.get("providers", [])}
+    from job_search.job_search_client import DEFAULT_CONFIG
+    return DEFAULT_CONFIG
+
+
+def _resolve_candidate_ids(profile_config: dict, override_candidate: Optional[str]) -> list[str]:
+    if override_candidate:
+        return [override_candidate]
+    candidate_ids = profile_config.get("candidate_ids")
+    if isinstance(candidate_ids, list) and candidate_ids:
+        return [str(item) for item in candidate_ids if item]
+    candidate_id = profile_config.get("candidate_id")
+    if candidate_id:
+        return [str(candidate_id)]
+    try:
+        candidates = candidate_db.list_candidates()
+        return [candidate.id for candidate in candidates]
+    except Exception:
+        return []
+
+
+def main() -> int:
+    args = _parse_args()
+    if args.mode != "daily":
+        print(f"Unsupported mode: {args.mode}")
+        return 2
+
+    profile_name = args.profile
+    profile_config: dict = {}
+    if not profile_name and args.use_default_profile:
+        profile_name = get_default_profile()
+
+    if profile_name:
+        try:
+            profile_config = load_profile_config(profile_name)
+        except FileNotFoundError as exc:
+            if profile_name == "default":
+                profile_config = {}
+                profile_name = None
+            else:
+                print(str(exc))
+                return 2
+        if profile_name:
+            db_path, logs_dir = apply_profile_env(profile_name, profile_config)
+            print(f"[pipeline] profile={profile_name} db_path={db_path}")
+            print(f"[pipeline] profile={profile_name} logs_dir={logs_dir}")
+    else:
+        if not os.getenv("DB_PATH"):
+            os.environ["DB_PATH"] = str(AGENTS_DIR / "data" / "app.db")
+            print(
+                "[pipeline] No profile selected. "
+                "Using legacy default (agents/data/app.db). "
+                "Open Streamlit to create or select a profile."
+            )
+
+    provider_config = _load_provider_config(profile_config, args.provider_config)
+    candidate_ids = _resolve_candidate_ids(profile_config, args.candidate_id)
+    if not candidate_ids:
+        print("Missing candidate id. Provide --candidate-id or set it in the profile config.")
+        return 2
+
+    results = []
+    for candidate_id in candidate_ids:
+        stats = run_daily(
+            candidate_id=candidate_id,
+            provider_config=provider_config,
+            limit_to_score=max(0, args.limit),
+        )
+        results.append(stats)
+
+    print(json.dumps(results, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
