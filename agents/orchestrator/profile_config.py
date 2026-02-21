@@ -70,7 +70,7 @@ def resolve_db_path(profile_name: str, profile_config: dict) -> Path:
         if profile_name == "default":
             db_path = str(AGENTS_DIR / "data" / "app.db")
         else:
-            db_path = str(ROOT_DIR / "data" / f"jobs_{profile_name}.db")
+            db_path = str(AGENTS_DIR / "data" / f"jobs_{profile_name}.db")
     return Path(db_path).expanduser().resolve()
 
 

@@ -15,6 +15,6 @@
       }
     ]
   },
-  "db_path": "agents/data/app.db",
+  "db_path": "agents/data/jobs_example.db",
   "logs_dir": "logs/example"
 }
