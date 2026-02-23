@@ -38,7 +38,7 @@ st.set_page_config(page_title="Agentic Jobs Search", layout="wide")
 st.title("Agentic Jobs Application: Search and Review Your Next Role")
 st.caption(f"Server port: {st.get_option('server.port')}")
 
-st.header("Profile")
+st.header("User Profile")
 profiles = list_profiles()
 default_profile = get_default_profile()
 profile_options = ["(none)"] + profiles
@@ -52,7 +52,7 @@ if "pending_profile" in st.session_state:
         st.session_state.selected_profile = pending
 
 selected_profile = st.selectbox(
-    "Active profile",
+    "Active user",
     options=profile_options,
     index=profile_options.index(st.session_state.selected_profile)
     if st.session_state.selected_profile in profile_options
@@ -68,7 +68,7 @@ if selected_profile != "(none)":
         st.caption(f"DB: {db_path}")
         st.caption(f"Logs: {logs_dir}")
     except Exception as exc:
-        st.error(f"Failed to load profile {selected_profile}: {exc}")
+        st.error(f"Failed to load user {selected_profile}: {exc}")
         profile_config = {}
 
 if selected_profile != "(none)":
@@ -76,19 +76,19 @@ if selected_profile != "(none)":
     with col_a:
         if st.button("Set as default"):
             set_default_profile(selected_profile)
-            st.success(f"Default profile set to {selected_profile}.")
+            st.success(f"Default user set to {selected_profile}.")
             st.rerun()
     with col_b:
         if default_profile:
             st.caption(f"Current default: {default_profile}")
         else:
-            st.caption("No default profile set.")
+            st.caption("No default user set.")
 else:
-    st.info("No profile selected. Create or choose a profile to isolate data and logs.")
+    st.info("No user selected. Create or choose a user to isolate data and logs.")
 
-with st.expander("Create or Update Profile"):
+with st.expander("Create or Update User"):
     name_default = selected_profile if selected_profile != "(none)" else ""
-    profile_name = st.text_input("Profile name", value=name_default)
+    profile_name = st.text_input("User name", value=name_default)
     existing_config = profile_config if profile_name == selected_profile else {}
 
     db_default = resolve_db_path(profile_name or "default", existing_config)
@@ -105,9 +105,9 @@ with st.expander("Create or Update Profile"):
     )
     set_default = st.checkbox("Set as default after save", value=False)
 
-    if st.button("Save profile"):
+    if st.button("Save user"):
         if not profile_name.strip():
-            st.error("Profile name is required.")
+            st.error("User name is required.")
         else:
             try:
                 provider_config = json.loads(provider_config_input)
@@ -123,13 +123,13 @@ with st.expander("Create or Update Profile"):
                 save_profile_config(profile_name.strip(), new_config)
                 if set_default:
                     set_default_profile(profile_name.strip())
-                st.success(f"Profile saved: {profile_name.strip()}")
+                st.success(f"User saved: {profile_name.strip()}")
                 st.session_state.pending_profile = profile_name.strip()
                 st.rerun()
 
 if not os.getenv("DB_PATH"):
     os.environ["DB_PATH"] = str(AGENTS_DIR / "data" / "app.db")
-    st.info("Using legacy DB at agents/data/app.db. Create/select a profile to isolate data.")
+    st.info("Using legacy DB at agents/data/app.db. Create/select a user to isolate data.")
 
 if "legacy_db_warned" not in st.session_state:
     st.session_state.legacy_db_warned = False
@@ -313,10 +313,11 @@ def _status_color(state: Optional[str]) -> str:
     return "#718096"  # gray
 
 
-st.header("Candidate")
+st.header("Candidate Profile")
+st.caption("A single user can manage multiple candidate profiles.")
 
 candidates = _load_candidates()
-selected = st.selectbox("Candidate ID", options=["(new)"] + candidates)
+selected = st.selectbox("Candidate Profile", options=["(new)"] + candidates)
 candidate_id = None if selected == "(new)" else selected
 if "use_saved_prefs" not in st.session_state:
     st.session_state.use_saved_prefs = False
@@ -342,7 +343,7 @@ if selected == "(new)":
         st.session_state.new_candidate_id = str(uuid4())
     candidate_id = st.session_state.get("new_candidate_id")
     if candidate_id:
-        st.caption(f"New candidate id: {candidate_id}")
+        st.caption(f"New candidate profile id: {candidate_id}")
     if st.session_state.loaded_candidate_id is not None:
         st.session_state.loaded_candidate_id = None
 else:
@@ -388,9 +389,9 @@ with st.expander("Preferences (optional)"):
 
 if st.button("Generate/Update Profile"):
     if not candidate_id:
-        st.error("Provide a candidate id before generating a profile.")
+        st.error("Select a candidate profile before generating a profile.")
     elif not resume_text.strip():
-        st.error("Provide resume text to generate a profile.")
+        st.error("Provide resume text to generate a candidate profile.")
     else:
         try:
             preferences = CandidatePreferences(

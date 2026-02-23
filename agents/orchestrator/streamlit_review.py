@@ -99,12 +99,13 @@ def _status_color(state: Optional[str]) -> str:
     return "#718096"  # gray
 
 
-st.header("Candidate")
+st.header("Candidate Profile")
+st.caption("A single user can manage multiple candidate profiles.")
 candidate_options = _load_candidates()
-selected = st.selectbox("Candidate ID", options=["(select)"] + candidate_options)
+selected = st.selectbox("Candidate Profile", options=["(select)"] + candidate_options)
 
 if selected == "(select)":
-    st.info("Select a candidate to review opportunities.")
+    st.info("Select a candidate profile to review opportunities.")
     st.stop()
 
 state_filter = st.multiselect(
@@ -127,7 +128,7 @@ state_filter = st.multiselect(
 
 opps = _load_opportunities(selected, state_filter)
 if not opps:
-    st.info("No opportunities found for this candidate.")
+    st.info("No opportunities found for this candidate profile.")
     st.stop()
 
 counts = {}

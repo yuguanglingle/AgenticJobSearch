@@ -146,7 +146,7 @@ def build_payload() -> dict:
             {"desc": True, "field": "discovered_at"},
         ],
         "page": 0,
-        "limit": 5,
+        "limit": 20,
         "job_title_or": ["Corporate development", "Strategy", "Venture"],
         "job_title_not": ["Director", "Intern", "Lead"],
         "job_description_contains_or": ["2+ years", "3+ years", "4+ years", "2 years", "3 years", "4 years"],
