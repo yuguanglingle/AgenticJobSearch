@@ -1,4 +1,6 @@
-﻿import json
+"""Streamlit UI for candidate profile management."""
+
+import json
 import sys
 from pathlib import Path
 
@@ -178,6 +180,7 @@ with col3:
             st.success("✓ Profile generated!")
         except Exception as exc:
             st.error(f"Error: {str(exc)}")
+            print(f"Candidate profile generation failed: {exc}")
     
     st.divider()
     

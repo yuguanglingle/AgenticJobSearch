@@ -1,22 +1,32 @@
-﻿import json
+"""Candidate profile generation agent."""
+
+import json
 import uuid
 from typing import Optional, Tuple, Dict, Any
 from pydantic import ValidationError
 
-from src.models import (
+from .models import (
     CandidateProfileRequest,
     CandidateProfileEnvelope,
 )
-from src.llm_client import LLMClient
-from src.prompts import SYSTEM_PROMPT, build_user_prompt, PROMPT_VERSION
-from src.utils import now_utc_iso, clamp, unique_sorted
-from src import db
+from .llm_client import LLMClient
+from .prompts import SYSTEM_PROMPT, build_user_prompt, PROMPT_VERSION
+from .utils import now_utc_iso, clamp, unique_sorted
+from . import db
 
 
 AGENT_NAME = "CandidateProfileAgent"
 
 
 def _normalize_envelope(envelope: CandidateProfileEnvelope) -> CandidateProfileEnvelope:
+    """Normalize and cap fields in the candidate profile envelope.
+
+    Args:
+        envelope: CandidateProfileEnvelope instance.
+
+    Returns:
+        Normalized CandidateProfileEnvelope.
+    """
     profile = envelope.result.candidate_profile
     profile.core_skills = unique_sorted(profile.core_skills, 25)
     profile.domains = unique_sorted(profile.domains, 10)
@@ -32,6 +42,14 @@ def _normalize_envelope(envelope: CandidateProfileEnvelope) -> CandidateProfileE
 def generate_candidate_profile(
     input: CandidateProfileRequest,
 ) -> Tuple[CandidateProfileEnvelope, str, Optional[Dict[str, Any]]]:
+    """Generate candidate profile via LLM and persist results.
+
+    Args:
+        input: CandidateProfileRequest payload.
+
+    Returns:
+        Tuple of (CandidateProfileEnvelope, usage_summary, usage_raw).
+    """
     candidate_id = input.candidate_id or str(uuid.uuid4())
     run_id = str(uuid.uuid4())
     timestamp = now_utc_iso()
@@ -55,7 +73,7 @@ def generate_candidate_profile(
 
     try:
         envelope = parse_response(raw_response)
-    except (json.JSONDecodeError, ValidationError):
+    except (json.JSONDecodeError, ValidationError) as exc:
         fixed = client.fix_json(system_prompt=SYSTEM_PROMPT, bad_json=raw_response)
         usage_summary = client.usage_summary()
         usage_raw = client.last_usage
@@ -63,7 +81,13 @@ def generate_candidate_profile(
             envelope = parse_response(fixed)
             raw_response = fixed
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise ValueError("LLM returned invalid JSON.") from exc
+            error_details = exc.errors() if isinstance(exc, ValidationError) else str(exc)
+            raise ValueError(
+                "LLM returned invalid JSON.\n"
+                f"raw_response={raw_response}\n"
+                f"fixed_response={fixed}\n"
+                f"errors={error_details}"
+            ) from exc
 
     envelope.ok = True
     envelope.agent = AGENT_NAME

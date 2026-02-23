@@ -1,4 +1,6 @@
-﻿PROMPT_VERSION = "v1.0"
+"""Prompt templates for candidate profile generation."""
+
+PROMPT_VERSION = "v1.0"
 
 SYSTEM_PROMPT = (
     "You are CandidateProfileAgent. Return only valid JSON with no markdown or extra keys. "
@@ -49,6 +51,17 @@ Confidence rubric (0-1):
 
 
 def build_user_prompt(*, run_id: str, timestamp: str, resume_text: str, preferences_json: str) -> str:
+    """Build the user prompt for profile generation.
+
+    Args:
+        run_id: Run id string.
+        timestamp: ISO timestamp string.
+        resume_text: Raw resume text.
+        preferences_json: Preferences JSON string.
+
+    Returns:
+        Prompt string.
+    """
     return (
         "Extract a candidate profile from the resume. Use the schema exactly. "
         "Set run_id and timestamp to the provided values.\n\n"

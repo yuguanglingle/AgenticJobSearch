@@ -23,7 +23,14 @@ from src.models import (
 
 class NormalizeEnvelopeTests(unittest.TestCase):
     def test_normalize_envelope_caps_lists_and_confidence(self) -> None:
-        """Ensure normalization caps list sizes and clamps confidence."""
+        """Ensure normalization caps list sizes and clamps confidence.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         highlights = [
             ExperienceHighlight(
                 company=f"Company {i}",

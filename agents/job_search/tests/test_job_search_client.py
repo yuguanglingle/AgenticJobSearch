@@ -18,18 +18,39 @@ from job_search_client import clean_text, sha256_text, map_job
 
 class JobSearchClientTests(unittest.TestCase):
     def test_clean_text_collapses_whitespace(self) -> None:
-        """Normalize whitespace to a single-space string."""
+        """Normalize whitespace to a single-space string.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         self.assertEqual(clean_text(" a  b\n c "), "a b c")
 
     def test_sha256_text_is_deterministic(self) -> None:
-        """Ensure hashing is stable and returns a 64-char digest."""
+        """Ensure hashing is stable and returns a 64-char digest.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         first = sha256_text("hello")
         second = sha256_text("hello")
         self.assertEqual(first, second)
         self.assertEqual(len(first), 64)
 
     def test_map_job_basic_fields(self) -> None:
-        """Map core fields from provider payload into normalized schema."""
+        """Map core fields from provider payload into normalized schema.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         payload = {
             "id": 123,
             "job_title": "Engineer",

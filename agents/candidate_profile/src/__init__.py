@@ -1,2 +1,4 @@
-﻿# flake8: noqa
+"""Candidate profile package."""
+
+# flake8: noqa
 
