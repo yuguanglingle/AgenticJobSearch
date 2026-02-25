@@ -1,16 +1,39 @@
 @echo off
 setlocal EnableDelayedExpansion
 set "PYTHONPATH=%~dp0agents"
-set "CANDIDATE_FILE=%~dp0candidate.txt"
-set "LOG_DIR=%~dp0logs"
 set "ENV_FILE=%~dp0agents\.env"
+set "PROJECT_CONFIG=%~dp0config\project.json"
+set "PROFILES_DIR=%~dp0config\profiles"
+
+set "DEFAULT_PROFILE="
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "try { (Get-Content -Raw '%PROJECT_CONFIG%' | ConvertFrom-Json).default_profile } catch { '' }"`) do (
+  set "DEFAULT_PROFILE=%%P"
+)
+set "DEFAULT_PROFILE=!DEFAULT_PROFILE:"=!"
+
+if not defined DEFAULT_PROFILE (
+  echo [%DATE% %TIME%] ERROR: default_profile missing in %PROJECT_CONFIG%
+  exit /b 1
+)
+
+set "PROFILE_CONFIG=%PROFILES_DIR%\!DEFAULT_PROFILE!.json"
+set "LOG_DIR="
+for /f "usebackq delims=" %%L in (`powershell -NoProfile -Command "try { $p = (Get-Content -Raw '%PROFILE_CONFIG%' | ConvertFrom-Json); if ($p.logs_dir) { $p.logs_dir } else { '' } } catch { '' }"`) do (
+  set "LOG_DIR=%%L"
+)
+set "LOG_DIR=!LOG_DIR:"=!"
+if not defined LOG_DIR (
+  set "LOG_DIR=%~dp0logs\!DEFAULT_PROFILE!"
+)
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 set "LOG_FILE=%LOG_DIR%\run_daily_%DATE:~-4%%DATE:~4,2%%DATE:~7,2%_%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%.log"
 
 echo [%DATE% %TIME%] Starting run_daily_candidate.bat > "%LOG_FILE%"
 echo [%DATE% %TIME%] WorkingDir=%~dp0 >> "%LOG_FILE%"
-echo [%DATE% %TIME%] CandidateFile=%CANDIDATE_FILE% >> "%LOG_FILE%"
+echo [%DATE% %TIME%] DefaultProfile=!DEFAULT_PROFILE! >> "%LOG_FILE%"
+echo [%DATE% %TIME%] ProfileConfig=%PROFILE_CONFIG% >> "%LOG_FILE%"
+echo [%DATE% %TIME%] LogDir=%LOG_DIR% >> "%LOG_FILE%"
 echo [%DATE% %TIME%] EnvFile=%ENV_FILE% >> "%LOG_FILE%"
 
 if exist "%ENV_FILE%" (
@@ -58,21 +81,12 @@ if defined THEIRSTACK_API_KEY (
   echo [%DATE% %TIME%] THEIRSTACK_API_KEY=missing >> "%LOG_FILE%"
 )
 
-if not exist "%CANDIDATE_FILE%" (
-  echo [%DATE% %TIME%] ERROR: Missing candidate.txt at %CANDIDATE_FILE% >> "%LOG_FILE%"
-  exit /b 1
-)
-
-for /f "usebackq tokens=* delims=" %%C in ("%CANDIDATE_FILE%") do (
-  if not "%%C"=="" (
-    echo [%DATE% %TIME%] Running candidate_id=%%C >> "%LOG_FILE%"
-    python -u -c "import json; from orchestrator import pipeline; provider_config=json.loads('''{\"providers\":[{\"name\":\"theirstack\",\"type\":\"theirstack\",\"enabled\":true,\"api_key_env\":\"THEIRSTACK_API_KEY\",\"payload_overrides\":{}}]}'''); pipeline.run_daily(candidate_id=r'%%C', provider_config=provider_config, limit_to_score=5)" >> "%LOG_FILE%" 2>&1
-    if errorlevel 1 (
-      set "EXIT_CODE=!ERRORLEVEL!"
-      echo [%DATE% %TIME%] ERROR: Python failed for candidate_id=%%C ExitCode=!EXIT_CODE! >> "%LOG_FILE%"
-      exit /b !EXIT_CODE!
-    )
-  )
+echo [%DATE% %TIME%] Running daily pipeline for default profile >> "%LOG_FILE%"
+python -u -m orchestrator.pipeline --mode daily --use-default-profile >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+  set "EXIT_CODE=!ERRORLEVEL!"
+  echo [%DATE% %TIME%] ERROR: Python failed ExitCode=!EXIT_CODE! >> "%LOG_FILE%"
+  exit /b !EXIT_CODE!
 )
 
 echo [%DATE% %TIME%] Completed run_daily_candidate.bat >> "%LOG_FILE%"
