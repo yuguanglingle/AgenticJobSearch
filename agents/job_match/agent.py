@@ -335,9 +335,11 @@ class JobFitAgent:
             JobFitResult.
         """
         system_prompt = (
-            "You are a strict job fit evaluator. Return JSON only with keys: "
-            "overall_score (0-100), decision (strong_yes|maybe|no), "
-            "subscores, top_reasons, gaps, dealbreakers_triggered."
+            "You are a strict job fit evaluator. Evaluate how fit is each job for the given candidate profile."
+            "Return JSON only with keys: "
+            "fit_reasons, not_fit_reasons, subscores, top_reasons, gaps, dealbreakers_triggered,"
+            "overall_score (0-100), decision (strong_yes|maybe|no)."
+            ""
         )
         user_prompt = json.dumps(
             {
