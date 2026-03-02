@@ -31,6 +31,31 @@ from orchestrator.profile_config import (
 )
 from job_search.job_search_client import DEFAULT_CONFIG, build_payload
 
+def _looks_like_legacy_user_path(path_value: str) -> bool:
+    """True when an absolute path points at a different user's home directory."""
+    try:
+        candidate = Path(path_value).expanduser().resolve(strict=False)
+    except Exception:
+        return False
+    if not candidate.is_absolute():
+        return False
+    home = Path.home().resolve(strict=False)
+    try:
+        candidate.relative_to(home)
+        return False
+    except ValueError:
+        pass
+    lower_parts = [part.lower() for part in candidate.parts]
+    return "users" in lower_parts or "home" in lower_parts
+
+
+def _path_for_ui(path_value: str, fallback: Path) -> str:
+    """Keep path as-is unless it points to the legacy user directory."""
+    if _looks_like_legacy_user_path(path_value):
+        return str(fallback)
+    return path_value
+
+
 load_dotenv(BASE_DIR / ".env")
 load_dotenv(AGENTS_DIR / ".env")
 
@@ -41,9 +66,12 @@ st.caption(f"Server port: {st.get_option('server.port')}")
 st.header("User Profile")
 profiles = list_profiles()
 default_profile = get_default_profile()
+missing_default_profile = bool(default_profile) and default_profile not in profiles
 profile_options = ["(none)"] + profiles
 if "selected_profile" not in st.session_state:
-    st.session_state.selected_profile = default_profile or "(none)"
+    st.session_state.selected_profile = (
+        default_profile if (default_profile and default_profile in profiles) else "(none)"
+    )
 if st.session_state.selected_profile not in profile_options:
     st.session_state.selected_profile = "(none)"
 if "pending_profile" in st.session_state:
@@ -60,13 +88,21 @@ selected_profile = st.selectbox(
     key="selected_profile",
 )
 
+if missing_default_profile:
+    st.warning(
+        f'Default user "{default_profile}" is missing on this machine. '
+        "Please select another user or create a new one."
+    )
+
 profile_config: dict = {}
 if selected_profile != "(none)":
     try:
         profile_config = load_profile_config(selected_profile)
         db_path, logs_dir = apply_profile_env(selected_profile, profile_config)
-        st.caption(f"DB: {db_path}")
-        st.caption(f"Logs: {logs_dir}")
+        default_db_path = resolve_db_path(selected_profile, {})
+        default_logs_dir = resolve_logs_dir(selected_profile, {})
+        st.caption(f"DB: {_path_for_ui(str(db_path), default_db_path)}")
+        st.caption(f"Logs: {_path_for_ui(str(logs_dir), default_logs_dir)}")
     except Exception as exc:
         st.error(f"Failed to load user {selected_profile}: {exc}")
         profile_config = {}
@@ -93,11 +129,19 @@ with st.expander("Create or Update User"):
 
     db_default = resolve_db_path(profile_name or "default", existing_config)
     logs_default = resolve_logs_dir(profile_name or "default", existing_config)
+    fallback_db_default = resolve_db_path(profile_name or "default", {})
+    fallback_logs_default = resolve_logs_dir(profile_name or "default", {})
 
     limit_default = int(existing_config.get("limit_to_score", 50))
     limit_to_score_input = st.number_input("Limit to score (default)", min_value=1, value=limit_default)
-    db_path_input = st.text_input("DB path", value=str(db_default))
-    logs_dir_input = st.text_input("Logs dir", value=str(logs_default))
+    db_path_input = st.text_input(
+        "DB path",
+        value=_path_for_ui(str(db_default), fallback_db_default),
+    )
+    logs_dir_input = st.text_input(
+        "Logs dir",
+        value=_path_for_ui(str(logs_default), fallback_logs_default),
+    )
     provider_config_input = st.text_area(
         "Provider config (JSON)",
         value=json.dumps(existing_config.get("provider_config") or DEFAULT_CONFIG, indent=2),
@@ -136,7 +180,14 @@ if "legacy_db_warned" not in st.session_state:
 
 legacy_db = AGENTS_DIR / "data" / "app.db"
 if legacy_db.exists() and not st.session_state.legacy_db_warned:
-    st.warning(f"Legacy DB detected at {legacy_db}. Current DB is {os.environ.get('DB_PATH')}.")
+    current_db_display = _path_for_ui(
+        os.environ.get("DB_PATH", str(legacy_db)),
+        resolve_db_path(selected_profile if selected_profile != "(none)" else "default", {}),
+    )
+    st.warning(
+        f"Legacy DB detected at {legacy_db}. "
+        f"Current DB is {current_db_display}."
+    )
     st.session_state.legacy_db_warned = True
 
 from candidate_profile.src import db as candidate_db

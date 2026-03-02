@@ -3,5 +3,11 @@ beautifulsoup4>=4.12
 lxml>=5.1
 feedparser>=6.0
 readability-lxml>=0.8.1
+requests>=2.31
+python-dotenv>=1.0
 pydantic>=2.6
 rich>=13.7
+openai>=2.24.0
+sqlmodel>=0.0.31
+pytest
+streamlit>=1.53.1
