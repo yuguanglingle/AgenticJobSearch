@@ -1,0 +1,15 @@
+{
+  "candidate_id": "",
+  "limit_to_score": 50,
+  "provider_config": {
+    "providers": [
+      {
+        "name": "theirstack",
+        "type": "theirstack",
+        "enabled": true,
+        "api_key_env": "THEIRSTACK_API_KEY",
+        "payload_overrides": {}
+      }
+    ]
+  }
+}
