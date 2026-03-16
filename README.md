@@ -1,42 +1,74 @@
-﻿# Agentic Job Search
+﻿# AI Job Search System
 
-This repo is organized by agent/component. Each folder under `agents/` contains its own code, dependencies, and UI (if any).
+An AI-powered job discovery and ranking system that automatically finds relevant opportunities and ranks them based on candidate profiles using LLM-based reasoning and feedback learning.
 
-DB_PATH environment variable ⚠️
+## Key Features
 
-- The integration scripts and agents use a shared SQLite DB at `agents/data/app.db` by default.
-- If the environment variable `DB_PATH` is *unset or an empty string*, the integration runner will set it to the repository's shared `agents/data/app.db` (to avoid accidental writes to an unintended location).
-- If you want to use an alternate DB for testing, set `DB_PATH` to an absolute path before running the integration script.
+Automated daily job discovery
 
-Current components:
-- `agents/candidate_profile` (implemented)
-- `agents/job_search` (placeholder)
-- `agents/job_match` (placeholder)
-- `agents/networking` (placeholder)
-- `agents/drafting` (placeholder)
-- `agents/orchestrator` (placeholder)
+Candidate profile extraction using LLM
 
-## Workflow State Machine (Hard Rule)
+Intelligent job ranking with reasons
 
-`agents/orchestrator/state.py` is the shared workflow/state machine layer and the only place allowed to change job opportunity lifecycle state.
+UI for candidate to track jobs screened and take actions
 
-Rules:
-- Orchestrator pipelines must write fit results via `state.apply_fit_result(...)` (DISCOVERED → SCREENED for all scored jobs).
-- UI and downstream agents may read from the DB, but must use `state.approve(...)`, `state.close(...)`, and `state.mark_applied(...)` for user actions.
-- No other module should directly update `job_opportunities.state`, `next_action`, `last_state_changed_at`, or skip flags.
+Configurable candidate profiles
 
-## Job Source Probe
+Reproducible local deployment
 
-This repo includes a standalone feasibility probe for testing job source ingestion access.
+## Architecture
 
-Run:
-```
-pip install -r requirements.txt
-python probe.py --config sources_to_probe.json
-```
+See /docs/architecture.md.
 
-Outputs:
-- Console table with probe results.
-- `probe_report.json` with full details and ranked sources.
+The system consists of four main components:
 
-To add sources, extend `sources_to_probe.json` with a new entry and implement an adapter in `adapters/`.
+Candidate profile extraction
+
+Job data aggregation
+
+AI-driven job scoring
+
+Feedback learning loop
+
+## Workflow
+Job Providers → Filtering → LLM Scoring → Ranking → Feedback Learning
+
+## Quickstart
+
+Clone repository
+
+```git clone https://github.com/yourname/agentic-job-search
+cd agentic-job-search```
+
+Install dependencies
+
+```pip install -r requirements.txt```
+
+Create environment variables
+
+```cp .env.example .env```
+
+Add API keys:
+
+```OPENAI_API_KEY=
+THEIRSTACK_API_KEY=```
+
+Launch UI
+
+```streamlit run app/ui/streamlit_app.py```
+
+
+## Example Output
+
+TODO: Include screenshots here.
+
+Ranked job list
+
+Job scoring explanation
+
+Feedback interface
+
+## Future improvement
+Multi-source job aggregation
+
+Feedback-driven preference learning

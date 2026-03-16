@@ -6,11 +6,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import load_dotenv
+
 from sqlmodel import Session
 
 from job_match import db as job_match_db
 from job_match.pre_ranker import compute_retrieval_score
 from job_match.state_machine import JobState
+
+BASE_DIR = Path(__file__).resolve().parent
+AGENTS_DIR = BASE_DIR.parent
+if str(AGENTS_DIR) not in sys.path:
+    sys.path.insert(0, str(AGENTS_DIR))
+
+load_dotenv(BASE_DIR / ".env")
+load_dotenv(AGENTS_DIR / ".env")
 
 _candidate_db = None
 _job_search_db = None
@@ -335,9 +345,11 @@ class JobFitAgent:
             JobFitResult.
         """
         system_prompt = (
-            "You are a strict job fit evaluator. Return JSON only with keys: "
-            "overall_score (0-100), decision (strong_yes|maybe|no), "
-            "subscores, top_reasons, gaps, dealbreakers_triggered."
+            "You are a strict job fit evaluator. Evaluate how fit is each job for the given candidate profile."
+            "Return JSON only with keys: "
+            "fit_reasons, not_fit_reasons, subscores, top_reasons, gaps, dealbreakers_triggered,"
+            "overall_score (0-100), decision (strong_yes|maybe|no)."
+            ""
         )
         user_prompt = json.dumps(
             {

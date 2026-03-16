@@ -1,24 +1,42 @@
-"""Minimal Streamlit UI for running and reviewing the job pipeline."""
+"""Streamlit UI for setup wizard, pipeline runs, and opportunity review."""
+
+from __future__ import annotations
 
 import json
 import os
-import socket
-import subprocess
+import random
 import sys
-from uuid import uuid4
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
-from dotenv import load_dotenv
 import streamlit as st
+from dotenv import dotenv_values, load_dotenv, set_key
+from openai import OpenAI
 from sqlmodel import Session, select
 
 BASE_DIR = Path(__file__).resolve().parent
 AGENTS_DIR = BASE_DIR.parent
 ROOT_DIR = AGENTS_DIR.parent
+ENV_PATH = ROOT_DIR / ".env"
+
 if str(AGENTS_DIR) not in sys.path:
     sys.path.insert(0, str(AGENTS_DIR))
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
+load_dotenv(ENV_PATH)
+
+from app.runtime import run_pipeline_command
+from candidate_profile.src import db as candidate_db
+from candidate_profile.src.agent import generate_candidate_profile
+from candidate_profile.src.models import CandidatePreferences, CandidateProfileRequest
+from job_match import db as job_match_db
+from job_match.state_machine import JobState
+from job_search import db as job_search_db
+from job_search.job_search_client import DEFAULT_CONFIG, build_payload, call_theirstack
+from orchestrator import state as orchestrator_state
 from orchestrator.profile_config import (
     apply_profile_env,
     get_default_profile,
@@ -29,155 +47,179 @@ from orchestrator.profile_config import (
     save_profile_config,
     set_default_profile,
 )
-from job_search.job_search_client import DEFAULT_CONFIG, build_payload
-
-load_dotenv(BASE_DIR / ".env")
-load_dotenv(AGENTS_DIR / ".env")
-
-st.set_page_config(page_title="Agentic Jobs Search", layout="wide")
-st.title("Agentic Jobs Application: Search and Review Your Next Role")
-st.caption(f"Server port: {st.get_option('server.port')}")
-
-st.header("User Profile")
-profiles = list_profiles()
-default_profile = get_default_profile()
-profile_options = ["(none)"] + profiles
-if "selected_profile" not in st.session_state:
-    st.session_state.selected_profile = default_profile or "(none)"
-if st.session_state.selected_profile not in profile_options:
-    st.session_state.selected_profile = "(none)"
-if "pending_profile" in st.session_state:
-    pending = st.session_state.pop("pending_profile")
-    if pending in profile_options:
-        st.session_state.selected_profile = pending
-
-selected_profile = st.selectbox(
-    "Active user",
-    options=profile_options,
-    index=profile_options.index(st.session_state.selected_profile)
-    if st.session_state.selected_profile in profile_options
-    else 0,
-    key="selected_profile",
-)
-
-profile_config: dict = {}
-if selected_profile != "(none)":
-    try:
-        profile_config = load_profile_config(selected_profile)
-        db_path, logs_dir = apply_profile_env(selected_profile, profile_config)
-        st.caption(f"DB: {db_path}")
-        st.caption(f"Logs: {logs_dir}")
-    except Exception as exc:
-        st.error(f"Failed to load user {selected_profile}: {exc}")
-        profile_config = {}
-
-if selected_profile != "(none)":
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("Set as default"):
-            set_default_profile(selected_profile)
-            st.success(f"Default user set to {selected_profile}.")
-            st.rerun()
-    with col_b:
-        if default_profile:
-            st.caption(f"Current default: {default_profile}")
-        else:
-            st.caption("No default user set.")
-else:
-    st.info("No user selected. Create or choose a user to isolate data and logs.")
-
-with st.expander("Create or Update User"):
-    name_default = selected_profile if selected_profile != "(none)" else ""
-    profile_name = st.text_input("User name", value=name_default)
-    existing_config = profile_config if profile_name == selected_profile else {}
-
-    db_default = resolve_db_path(profile_name or "default", existing_config)
-    logs_default = resolve_logs_dir(profile_name or "default", existing_config)
-
-    limit_default = int(existing_config.get("limit_to_score", 50))
-    limit_to_score_input = st.number_input("Limit to score (default)", min_value=1, value=limit_default)
-    db_path_input = st.text_input("DB path", value=str(db_default))
-    logs_dir_input = st.text_input("Logs dir", value=str(logs_default))
-    provider_config_input = st.text_area(
-        "Provider config (JSON)",
-        value=json.dumps(existing_config.get("provider_config") or DEFAULT_CONFIG, indent=2),
-        height=160,
-    )
-    set_default = st.checkbox("Set as default after save", value=False)
-
-    if st.button("Save user"):
-        if not profile_name.strip():
-            st.error("User name is required.")
-        else:
-            try:
-                provider_config = json.loads(provider_config_input)
-            except json.JSONDecodeError as exc:
-                st.error(f"Invalid provider config JSON: {exc}")
-            else:
-                new_config = {
-                    "limit_to_score": int(limit_to_score_input),
-                    "provider_config": provider_config,
-                    "db_path": db_path_input.strip(),
-                    "logs_dir": logs_dir_input.strip(),
-                }
-                save_profile_config(profile_name.strip(), new_config)
-                if set_default:
-                    set_default_profile(profile_name.strip())
-                st.success(f"User saved: {profile_name.strip()}")
-                st.session_state.pending_profile = profile_name.strip()
-                st.rerun()
-
-if not os.getenv("DB_PATH"):
-    os.environ["DB_PATH"] = str(AGENTS_DIR / "data" / "app.db")
-    st.info("Using legacy DB at agents/data/app.db. Create/select a user to isolate data.")
-
-if "legacy_db_warned" not in st.session_state:
-    st.session_state.legacy_db_warned = False
-
-legacy_db = AGENTS_DIR / "data" / "app.db"
-if legacy_db.exists() and not st.session_state.legacy_db_warned:
-    st.warning(f"Legacy DB detected at {legacy_db}. Current DB is {os.environ.get('DB_PATH')}.")
-    st.session_state.legacy_db_warned = True
-
-from candidate_profile.src import db as candidate_db
-from candidate_profile.src.agent import generate_candidate_profile
-from candidate_profile.src.models import CandidateProfileRequest, CandidatePreferences
-from job_match import db as job_match_db
-from job_match.state_machine import JobState
-from job_search import db as job_search_db
-from orchestrator import pipeline, state as orchestrator_state
 from orchestrator.theirstack_overrides import (
     DEFAULT_INDUSTRIES,
     DEFAULT_LOCATION_PATTERNS,
-    DEFAULT_REMOTE,
     DEFAULT_ROLE_TARGETS,
     DEFAULT_SENIORITY,
-    apply_theirstack_overrides,
 )
 
-if "last_pipeline_stats" not in st.session_state:
-    st.session_state.last_pipeline_stats = None
-if "loaded_candidate_id" not in st.session_state:
-    st.session_state.loaded_candidate_id = None
-if "last_theirstack_payload" not in st.session_state:
-    st.session_state.last_theirstack_payload = None
 
-# Default options in UI (seeded from TheirStack payload defaults).
-if "pref_locations" not in st.session_state:
-    st.session_state.pref_locations = ", ".join(DEFAULT_LOCATION_PATTERNS)
-if "pref_remote_preference" not in st.session_state:
-    st.session_state.pref_remote_preference = DEFAULT_REMOTE or "any"
-if "pref_role_targets" not in st.session_state:
-    st.session_state.pref_role_targets = ", ".join(DEFAULT_ROLE_TARGETS)
-if "pref_industries" not in st.session_state:
-    st.session_state.pref_industries = ", ".join(DEFAULT_INDUSTRIES)
-if "pref_seniority" not in st.session_state:
-    st.session_state.pref_seniority = list(DEFAULT_SENIORITY)
+st.set_page_config(page_title="Agentic Job Search", layout="wide")
+st.title("Agentic Job Search")
+st.caption("Setup wizard + local pipeline runner")
+st.markdown(
+    """
+    <style>
+    div[data-baseweb="tab-list"] button,
+    button[data-baseweb="tab"],
+    button[role="tab"] {
+        font-size: 1.15rem !important;
+        font-weight: 600 !important;
+        min-height: 3rem !important;
+        padding: 0.6rem 1rem !important;
+    }
+    div[data-baseweb="tab-list"] {
+        gap: 0.65rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
-def _load_candidates() -> list[str]:
-    candidates = candidate_db.list_candidates()
-    return [candidate.id for candidate in candidates]
+def _split_csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _candidate_shell_json(headline: str, skills: list[str], domains: list[str]) -> str:
+    payload = {
+        "ok": True,
+        "agent": "CandidateProfileAgent",
+        "run_id": str(uuid4()),
+        "timestamp": _now_iso(),
+        "result": {
+            "candidate_profile": {
+                "headline": headline or "Candidate profile",
+                "seniority_estimate": "mid",
+                "core_skills": skills,
+                "domains": domains,
+                "experience_highlights": [],
+                "keywords_for_search": list(dict.fromkeys(skills + domains)),
+                "tone_style": {"voice": "direct", "length": "short"},
+            }
+        },
+        "confidence": 0.3,
+        "evidence": [],
+        "next_actions": [],
+        "questions_for_user": [],
+    }
+    return json.dumps(payload)
+
+
+def _save_candidate_shell(candidate_id: str, resume_text: str, prefs: CandidatePreferences) -> None:
+    candidate_db.save_candidate(
+        candidate_id=candidate_id,
+        resume_raw=resume_text,
+        candidate_profile_json=_candidate_shell_json(
+            headline="Candidate generated from setup wizard",
+            skills=prefs.role_targets or ["python"],
+            domains=prefs.industries or ["general"],
+        ),
+        llm_model="manual",
+        prompt_version="manual",
+        created_at=_now_iso(),
+        updated_at=_now_iso(),
+        preferences=prefs.model_dump(),
+    )
+
+
+def _generate_friendly_name() -> str:
+    adjectives = ["Focused", "Curious", "Pragmatic", "Bold", "Strategic", "Steady", "Driven"]
+    nouns = ["Builder", "Analyst", "Operator", "Engineer", "Planner", "Scout", "Creator"]
+    return f"{random.choice(adjectives)} {random.choice(nouns)}"
+
+
+def _load_candidate_display_map() -> dict[str, str]:
+    try:
+        candidates = candidate_db.list_candidates()
+    except Exception as exc:
+        st.error(f"Failed to load candidates: {exc}")
+        return {}
+    if not candidates:
+        return {}
+    used: dict[str, int] = {}
+    display_to_id: dict[str, str] = {}
+    for index, candidate in enumerate(candidates, start=1):
+        base = (candidate.name or "").strip() or f"Candidate {index}"
+        used[base] = used.get(base, 0) + 1
+        suffix = used[base]
+        display_name = base if suffix == 1 else f"{base} ({suffix})"
+        display_to_id[display_name] = candidate.id
+    return display_to_id
+
+
+def _set_candidate_friendly_name(candidate_id: str, friendly_name: str) -> None:
+    try:
+        db_path = candidate_db.get_db_path()
+        engine = candidate_db.init_db(db_path)
+        with Session(engine) as session:
+            candidate = session.get(candidate_db.Candidate, candidate_id)
+            if not candidate:
+                return
+            candidate.name = friendly_name.strip() or None
+            candidate.updated_at = _now_iso()
+            session.add(candidate)
+            session.commit()
+    except Exception as exc:
+        st.error(f"Failed to save candidate name: {exc}")
+
+
+def _save_keys_to_env(openai_key: str, theirstack_key: str) -> None:
+    ENV_PATH.touch(exist_ok=True)
+    if openai_key:
+        set_key(str(ENV_PATH), "OPENAI_API_KEY", openai_key)
+    if theirstack_key:
+        set_key(str(ENV_PATH), "THEIRSTACK_API_KEY", theirstack_key)
+    load_dotenv(ENV_PATH, override=True)
+
+
+def _test_openai_key(api_key: str) -> tuple[bool, str]:
+    if not api_key:
+        return False, "Missing OPENAI_API_KEY"
+    try:
+        client = OpenAI(api_key=api_key)
+        models = client.models.list()
+        model_count = len(getattr(models, "data", []) or [])
+        return True, f"Connected. Model list returned ({model_count} entries in first page)."
+    except Exception as exc:
+        return False, f"OpenAI connection failed: {exc}"
+
+
+def _test_theirstack_key(api_key: str) -> tuple[bool, str]:
+    if not api_key:
+        return False, "Missing THEIRSTACK_API_KEY"
+    try:
+        payload = build_payload()
+        payload["limit"] = 1
+        payload["page"] = 0
+        response = call_theirstack(api_key, payload)
+        count = len(response.get("data", []))
+        return True, f"Connected. Retrieved {count} job(s)."
+    except Exception as exc:
+        return False, f"TheirStack connection failed: {exc}"
+
+
+def _load_opportunities(candidate_id: str) -> list[job_match_db.JobOpportunity]:
+    db_path = job_match_db.get_db_path()
+    engine = job_match_db.init_db(db_path)
+    with Session(engine) as session:
+        stmt = select(job_match_db.JobOpportunity).where(job_match_db.JobOpportunity.candidate_id == candidate_id)
+        return list(session.exec(stmt))
+
+
+def _load_jobs(job_ids: list[str]) -> dict[str, job_search_db.Job]:
+    if not job_ids:
+        return {}
+    db_path = job_search_db.get_db_path()
+    engine = job_search_db.init_db(db_path)
+    with Session(engine) as session:
+        stmt = select(job_search_db.Job).where(job_search_db.Job.id.in_(job_ids))
+        return {job.id: job for job in session.exec(stmt)}
 
 
 def _latest_fit_evaluations(candidate_id: str, job_ids: list[str]) -> dict[str, job_match_db.JobFitEvaluation]:
@@ -191,43 +233,14 @@ def _latest_fit_evaluations(candidate_id: str, job_ids: list[str]) -> dict[str, 
             job_match_db.JobFitEvaluation.candidate_id == candidate_id,
             job_match_db.JobFitEvaluation.job_id.in_(job_ids),
         )
-        evaluations = session.exec(stmt).all()
-        for evaluation in evaluations:
+        for evaluation in session.exec(stmt):
             current = latest.get(evaluation.job_id)
             if not current or evaluation.created_at > current.created_at:
                 latest[evaluation.job_id] = evaluation
     return latest
 
 
-def _load_opportunities(candidate_id: str, states: Optional[list[str]] = None) -> list[job_match_db.JobOpportunity]:
-    db_path = job_match_db.get_db_path()
-    engine = job_match_db.init_db(db_path)
-    with Session(engine) as session:
-        stmt = select(job_match_db.JobOpportunity).where(
-            job_match_db.JobOpportunity.candidate_id == candidate_id,
-        )
-        if states:
-            stmt = stmt.where(job_match_db.JobOpportunity.state.in_(states))
-        return list(session.exec(stmt))
-
-
-def _load_jobs(job_ids: list[str]) -> dict[str, job_search_db.Job]:
-    if not job_ids:
-        return {}
-    db_path = job_search_db.get_db_path()
-    engine = job_search_db.init_db(db_path)
-    with Session(engine) as session:
-        stmt = select(job_search_db.Job).where(job_search_db.Job.id.in_(job_ids))
-        jobs = session.exec(stmt).all()
-        return {job.id: job for job in jobs}
-
-
-def _bucket_rank(bucket: Optional[str]) -> int:
-    order = {"recommended": 0, "borderline": 1, "low_match": 2}
-    return order.get(bucket or "", 99)
-
-
-def _state_rank(state: Optional[str]) -> int:
+def _state_rank(value: Optional[str]) -> int:
     order = {
         JobState.SCREENED.value: 0,
         JobState.APPROVED.value: 1,
@@ -235,370 +248,336 @@ def _state_rank(state: Optional[str]) -> int:
         JobState.DISCOVERED.value: 3,
         JobState.CLOSED.value: 4,
     }
-    return order.get(state or "", 99)
+    return order.get(value or "", 99)
 
 
-def _reset_pref_state() -> None:
-    for key in [
-        "pref_locations",
-        "pref_remote_preference",
-        "pref_role_targets",
-        "pref_industries",
-        "pref_seniority",
-    ]:
-        st.session_state.pop(key, None)
+profiles = list_profiles()
+default_profile = get_default_profile() or "default"
+profile_options = sorted(set([default_profile] + profiles))
+if "active_profile" not in st.session_state:
+    st.session_state.active_profile = default_profile
+if st.session_state.active_profile not in profile_options:
+    st.session_state.active_profile = default_profile
 
+st.sidebar.header("Profile")
+active_profile = st.sidebar.selectbox("Active profile", options=profile_options, key="active_profile")
 
-def _apply_default_prefs() -> None:
-    st.session_state.pref_locations = ", ".join(DEFAULT_LOCATION_PATTERNS)
-    st.session_state.pref_remote_preference = DEFAULT_REMOTE or "any"
-    st.session_state.pref_role_targets = ", ".join(DEFAULT_ROLE_TARGETS)
-    st.session_state.pref_industries = ", ".join(DEFAULT_INDUSTRIES)
-    st.session_state.pref_seniority = list(DEFAULT_SENIORITY)
-
-
-def _apply_saved_prefs(candidate_id: str) -> None:
-    prefs = candidate_db.get_candidate_preferences(candidate_id)
-    candidate = candidate_db.get_candidate(candidate_id)
-    if prefs:
-        try:
-            pref_locations = ", ".join(json.loads(prefs.locations or "[]"))
-        except json.JSONDecodeError:
-            pref_locations = ", ".join(DEFAULT_LOCATION_PATTERNS)
-        try:
-            pref_role_targets = ", ".join(json.loads(prefs.role_targets or "[]"))
-        except json.JSONDecodeError:
-            pref_role_targets = ", ".join(DEFAULT_ROLE_TARGETS)
-        try:
-            pref_industries = ", ".join(json.loads(prefs.industries or "[]"))
-        except json.JSONDecodeError:
-            pref_industries = ", ".join(DEFAULT_INDUSTRIES)
-        st.session_state.pref_locations = pref_locations or ", ".join(DEFAULT_LOCATION_PATTERNS)
-        st.session_state.pref_remote_preference = prefs.remote_preference or DEFAULT_REMOTE or "any"
-        st.session_state.pref_role_targets = pref_role_targets or ", ".join(DEFAULT_ROLE_TARGETS)
-        st.session_state.pref_industries = pref_industries or ", ".join(DEFAULT_INDUSTRIES)
-        if prefs.seniority_preference:
-            try:
-                seniority_list = json.loads(prefs.seniority_preference or "[]")
-            except json.JSONDecodeError:
-                seniority_list = [prefs.seniority_preference]
-            st.session_state.pref_seniority = seniority_list
-        else:
-            st.session_state.pref_seniority = list(DEFAULT_SENIORITY)
-    if candidate and not st.session_state.pref_seniority:
-        try:
-            payload = json.loads(candidate.candidate_profile_json)
-            estimate = payload.get("result", {}).get("candidate_profile", {}).get("seniority_estimate")
-        except json.JSONDecodeError:
-            estimate = None
-        seniority_map = {
-            "junior": "junior",
-            "mid": "mid_level",
-            "mid_level": "mid_level",
-            "senior": "senior",
-            "staff": "staff",
-        }
-        mapped = seniority_map.get(estimate)
-        if mapped:
-            st.session_state.pref_seniority = [mapped]
-
-
-def _status_color(state: Optional[str]) -> str:
-    if state == JobState.APPROVED.value:
-        return "#2B6CB0"  # blue
-    if state == JobState.APPLIED.value:
-        return "#2F855A"  # green
-    if state == JobState.CLOSED.value:
-        return "#D69E2E"  # yellow
-    return "#718096"  # gray
-
-
-st.header("Candidate Profile")
-st.caption("A single user can manage multiple candidate profiles.")
-
-candidates = _load_candidates()
-selected = st.selectbox("Candidate Profile", options=["(new)"] + candidates)
-candidate_id = None if selected == "(new)" else selected
-if "use_saved_prefs" not in st.session_state:
-    st.session_state.use_saved_prefs = False
-
-
-def _on_saved_prefs_toggle() -> None:
-    if candidate_id:
-        _reset_pref_state()
-        _apply_default_prefs()
-        if st.session_state.use_saved_prefs:
-            _apply_saved_prefs(candidate_id)
-
-
-use_saved_prefs = st.checkbox(
-    "Use saved candidate preferences",
-    value=st.session_state.use_saved_prefs,
-    key="use_saved_prefs",
-    on_change=_on_saved_prefs_toggle,
-)
-
-if selected == "(new)":
-    if st.button("Create new candidate"):
-        st.session_state.new_candidate_id = str(uuid4())
-    candidate_id = st.session_state.get("new_candidate_id")
-    if candidate_id:
-        st.caption(f"New candidate profile id: {candidate_id}")
-    if st.session_state.loaded_candidate_id is not None:
-        st.session_state.loaded_candidate_id = None
-else:
-    if st.session_state.loaded_candidate_id != candidate_id:
-        _reset_pref_state()
-        _apply_default_prefs()
-        if use_saved_prefs:
-            _apply_saved_prefs(candidate_id)
-        st.session_state.loaded_candidate_id = candidate_id
-
-with st.expander("Resume (optional)"):
-    uploaded_resume = st.file_uploader("Upload resume (.txt)", type=["txt"])
-    resume_text = ""
-    if uploaded_resume is not None:
-        try:
-            resume_text = uploaded_resume.getvalue().decode("utf-8")
-        except Exception as exc:
-            st.error(f"Could not read resume: {exc}")
-    resume_text = st.text_area("Resume text", value=resume_text, height=200)
-
-with st.expander("Preferences (optional)"):
-    remote_options = ["any", "remote", "hybrid", "onsite"]
-    if st.session_state.pref_remote_preference not in remote_options:
-        st.session_state.pref_remote_preference = "any"
-    seniority_options = ["junior", "mid_level", "senior", "staff", "executive"]
-    st.session_state.pref_seniority = [
-        value for value in st.session_state.pref_seniority if value in seniority_options
-    ]
-
-    locations = st.text_input("Locations (comma-separated)", key="pref_locations")
-    remote_preference = st.selectbox(
-        "Remote preference",
-        options=remote_options,
-        key="pref_remote_preference",
-    )
-    role_targets = st.text_input("Role targets (comma-separated)", key="pref_role_targets")
-    industries = st.text_input("Industries (comma-separated)", key="pref_industries")
-    seniority = st.multiselect(
-        "Seniority (multiple)",
-        options=seniority_options,
-        key="pref_seniority",
-    )
-
-if st.button("Generate/Update Profile"):
-    if not candidate_id:
-        st.error("Select a candidate profile before generating a profile.")
-    elif not resume_text.strip():
-        st.error("Provide resume text to generate a candidate profile.")
-    else:
-        try:
-            preferences = CandidatePreferences(
-                locations=[item.strip() for item in locations.split(",") if item.strip()],
-                remote_preference=None if remote_preference == "any" else remote_preference,
-                role_targets=[item.strip() for item in role_targets.split(",") if item.strip()],
-                industries=[item.strip() for item in industries.split(",") if item.strip()],
-                seniority_preference=seniority,
-            )
-            request = CandidateProfileRequest(
-                candidate_id=candidate_id,
-                resume_text=resume_text,
-                preferences=preferences,
-            )
-            envelope, _, _ = generate_candidate_profile(request)
-            st.success("Profile generated.")
-            st.json(json.loads(envelope.json()))
-        except Exception as exc:
-            st.error(f"Profile generation failed: {exc}")
-
-
-st.header("Pipeline")
-
-limit_to_score = st.number_input("Limit to score", min_value=1, value=50)
-debug_request = st.checkbox("Debug provider request")
-
-st.subheader("Review (standalone)")
-review_port = os.getenv("REVIEW_PORT", "8601")
-review_url_default = f"http://localhost:{review_port}"
-review_url = st.text_input("Review app URL", value=review_url_default)
-st.caption(
-    f"Run: `streamlit run agents/orchestrator/streamlit_review.py --server.port {review_port}`"
-)
-if "8501" in review_url:
-    st.warning("Review URL points to the same port as this app. Run the review app on 8601.")
-
-
-def _is_port_open(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-            return True
-    except OSError:
-        return False
-
-
-def _launch_review_app(port: int) -> None:
-    subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "streamlit",
-            "run",
-            str(BASE_DIR / "streamlit_review.py"),
-            "--server.port",
-            str(port),
-        ],
-        cwd=str(AGENTS_DIR.parent),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-    )
-
+profile_config: dict = {}
+try:
+    profile_config = load_profile_config(active_profile) if active_profile in profiles else {}
+except Exception as exc:
+    st.sidebar.error(f"Profile load failed: {exc}")
 
 try:
-    review_port_int = int(review_port)
-except ValueError:
-    review_port_int = 8601
+    db_path, logs_dir = apply_profile_env(active_profile, profile_config)
+    st.sidebar.caption(f"DB: {db_path}")
+    st.sidebar.caption(f"Logs: {logs_dir}")
+except Exception as exc:
+    st.sidebar.error(f"Failed to apply profile env: {exc}")
 
-if st.button("Review Your Jobs"):
-    if _is_port_open(review_port_int):
-        st.info(f"Review UI already running on port {review_port_int}.")
-    else:
-        _launch_review_app(review_port_int)
-        st.success("Starting review UI...")
-    st.markdown(f"[Open review UI]({review_url})")
+if st.sidebar.button("Set as default"):
+    set_default_profile(active_profile)
+    st.sidebar.success(f"Default profile set to {active_profile}")
 
-if st.button("Run pipeline"):
-    if not candidate_id:
-        st.error("Select a candidate before running the pipeline.")
-    else:
-        try:
-            provider_config = profile_config.get("provider_config") or DEFAULT_CONFIG
-            provider_config = apply_theirstack_overrides(
-                provider_config=provider_config,
-                role_targets=role_targets,
-                seniority=seniority,
-            )
-            if debug_request:
-                os.environ["THEIRSTACK_DEBUG"] = "1"
-            payload = None
-            for provider in provider_config.get("providers", []):
-                if provider.get("type") != "theirstack":
-                    continue
-                payload = build_payload()
-                overrides = provider.get("payload_overrides") or {}
-                payload.update(overrides)
-                st.session_state.last_theirstack_payload = payload
-                if debug_request:
-                    st.subheader("Theirstack request payload")
-                    st.code(json.dumps(payload, indent=2, ensure_ascii=True), language="json")
-                    print(
-                        "[ui] theirstack payload overrides:",
-                        json.dumps(overrides, ensure_ascii=True),
-                    )
-            stats = pipeline.run_daily(
-                candidate_id=candidate_id,
-                provider_config=provider_config,
-                limit_to_score=int(limit_to_score),
-            )
-            st.success("Pipeline run complete.")
-            st.json(stats)
-            st.session_state.last_pipeline_stats = stats
-        except Exception as exc:
-            st.error(f"Pipeline failed: {exc}")
+if "last_run_result" not in st.session_state:
+    st.session_state.last_run_result = None
 
-if st.session_state.last_pipeline_stats:
-    stats = st.session_state.last_pipeline_stats
-    st.subheader("Pipeline status")
-    st.write(
-        "Eligible: "
-        f"{stats.get('num_eligible', 0)} | "
-        "Skipped (recently applied flag): "
-        f"{stats.get('num_skipped_recent_flag', 0)} | "
-        "Skipped (state): "
-        f"{stats.get('num_skipped_state', 0)}"
+setup_tab, run_tab, review_tab = st.tabs(["Setup Wizard", "Run Pipeline", "Review Jobs"])
+
+with setup_tab:
+    st.subheader("1) Create Profile")
+    profile_candidate_map = _load_candidate_display_map()
+    profile_candidate_options = ["(none)"] + list(profile_candidate_map.keys())
+    profile_candidate_id_current = str(profile_config.get("candidate_id", "")).strip()
+    profile_candidate_reverse = {value: key for key, value in profile_candidate_map.items()}
+    default_candidate_label = profile_candidate_reverse.get(profile_candidate_id_current, "(none)")
+    default_candidate_index = (
+        profile_candidate_options.index(default_candidate_label)
+        if default_candidate_label in profile_candidate_options
+        else 0
     )
-    st.write(
-        "Pre-ranked: "
-        f"{stats.get('num_pre_ranked', 0)} | "
-        "Scored: "
-        f"{stats.get('num_scored', 0)}"
-    )
-    if st.session_state.last_theirstack_payload:
-        with st.expander("Last Theirstack request payload"):
-            st.code(
-                json.dumps(st.session_state.last_theirstack_payload, indent=2, ensure_ascii=True),
-                language="json",
-            )
-
-
-st.header("Review")
-
-if not candidate_id:
-    st.info("Select a candidate to review screened opportunities.")
-else:
-    opportunities = _load_opportunities(candidate_id)
-    if not opportunities:
-        st.info("No screened opportunities yet.")
-    else:
-        opportunities.sort(
-            key=lambda opp: (_state_rank(opp.state), _bucket_rank(opp.screen_bucket), -(opp.fit_score or -1))
+    with st.form("profile_form"):
+        profile_name = st.text_input("Profile name", value=active_profile)
+        default_candidate_label = st.selectbox(
+            "Default candidate",
+            options=profile_candidate_options,
+            index=default_candidate_index,
+            help="Friendly names are shown here. IDs are stored internally.",
+            key="setup_default_candidate_select",
         )
-        job_ids = [opp.job_id for opp in opportunities]
-        jobs = _load_jobs(job_ids)
-        evaluations = _latest_fit_evaluations(candidate_id, job_ids)
+        limit_to_score = st.number_input(
+            "Default limit_to_score",
+            min_value=1,
+            value=int(profile_config.get("limit_to_score", 50)),
+        )
+        db_path_input = st.text_input(
+            "DB path",
+            value=str(resolve_db_path(profile_name or "default", profile_config)),
+        )
+        logs_dir_input = st.text_input(
+            "Logs dir",
+            value=str(resolve_logs_dir(profile_name or "default", profile_config)),
+        )
+        provider_json = st.text_area(
+            "Provider config JSON",
+            value=json.dumps(profile_config.get("provider_config") or DEFAULT_CONFIG, indent=2),
+            height=180,
+        )
+        save_as_default = st.checkbox("Set as default after save", value=True)
+        save_profile = st.form_submit_button("Save profile")
 
-        for opp in opportunities:
-            job = jobs.get(opp.job_id)
-            evaluation = evaluations.get(opp.job_id)
-            title = job.job_title if job else "Unknown role"
-            company = job.company if job else "Unknown company"
-            header = f"{company} - {title}"
-            color = _status_color(opp.state)
-            st.markdown(
-                f"<div style='background-color:{color};"
-                "color:white;padding:10px 12px;border-radius:8px;"
-                "margin:8px 0 6px 0;font-weight:600;'>"
-                f"{header} — Status: {opp.state}</div>",
-                unsafe_allow_html=True,
+    if save_profile:
+        if not profile_name.strip():
+            st.error("Profile name is required.")
+        else:
+            try:
+                provider_config = json.loads(provider_json)
+                candidate_id_for_profile = (
+                    profile_candidate_map.get(default_candidate_label, "")
+                    if default_candidate_label != "(none)"
+                    else ""
+                )
+                new_config = {
+                    "candidate_id": candidate_id_for_profile.strip(),
+                    "limit_to_score": int(limit_to_score),
+                    "provider_config": provider_config,
+                    "db_path": db_path_input.strip(),
+                    "logs_dir": logs_dir_input.strip(),
+                }
+                save_profile_config(profile_name.strip(), new_config)
+                if save_as_default:
+                    set_default_profile(profile_name.strip())
+                st.success(f"Saved profile: {profile_name.strip()}")
+            except json.JSONDecodeError as exc:
+                st.error(f"Invalid provider config JSON: {exc}")
+
+    st.subheader("2) Add API Keys")
+    env_values = dotenv_values(ENV_PATH)
+    openai_key = st.text_input(
+        "OPENAI_API_KEY",
+        value=str(env_values.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))),
+        type="password",
+    )
+    theirstack_key = st.text_input(
+        "THEIRSTACK_API_KEY",
+        value=str(env_values.get("THEIRSTACK_API_KEY", os.getenv("THEIRSTACK_API_KEY", ""))),
+        type="password",
+    )
+    if st.button("Save API keys to .env"):
+        _save_keys_to_env(openai_key.strip(), theirstack_key.strip())
+        st.success(f"Saved keys to {ENV_PATH}")
+
+    col_openai, col_theirstack = st.columns(2)
+    with col_openai:
+        if st.button("Test OpenAI connection"):
+            ok, message = _test_openai_key(openai_key.strip() or os.getenv("OPENAI_API_KEY", ""))
+            if ok:
+                st.success(message)
+            else:
+                st.error(message)
+    with col_theirstack:
+        if st.button("Test TheirStack connection"):
+            ok, message = _test_theirstack_key(theirstack_key.strip() or os.getenv("THEIRSTACK_API_KEY", ""))
+            if ok:
+                st.success(message)
+            else:
+                st.error(message)
+
+    st.subheader("3) Create Candidate")
+    st.caption(
+        "Each candidate is tied to a resume and preferences. One person can keep multiple candidates "
+        "(for example different resume versions)."
+    )
+    candidate_display_map = _load_candidate_display_map()
+    candidate_display_options = list(candidate_display_map.keys())
+    candidate_mode = st.radio(
+        "Candidate mode",
+        options=["Create new candidate", "Update existing candidate"],
+        horizontal=True,
+    )
+    if "new_candidate_friendly_name" not in st.session_state:
+        st.session_state.new_candidate_friendly_name = _generate_friendly_name()
+
+    active_candidate_id: Optional[str] = None
+    friendly_name_default = st.session_state.new_candidate_friendly_name
+    resume_default = ""
+    if candidate_mode == "Update existing candidate":
+        if not candidate_display_options:
+            st.info("No candidates available yet. Switch to 'Create new candidate' first.")
+        else:
+            selected_candidate_display = st.selectbox(
+                "Candidate",
+                options=candidate_display_options,
+                key="setup_existing_candidate_select",
             )
-            with st.expander(header, expanded=False):
+            active_candidate_id = candidate_display_map[selected_candidate_display]
+            try:
+                existing_candidate = candidate_db.get_candidate(active_candidate_id)
+            except Exception as exc:
+                existing_candidate = None
+                st.error(f"Failed to load candidate: {exc}")
+            if existing_candidate:
+                friendly_name_default = (existing_candidate.name or "").strip() or selected_candidate_display
+                resume_default = existing_candidate.resume_raw or ""
+
+    friendly_name = st.text_input(
+        "Candidate friendly name",
+        value=friendly_name_default,
+        help="Use a memorable label like 'Data Resume v2' or 'Backend Focus'.",
+    )
+    resume_text = st.text_area("Resume text", height=220, value=resume_default)
+    locations = st.text_input("Locations (comma separated)", value=", ".join(DEFAULT_LOCATION_PATTERNS))
+    remote_preference = st.selectbox("Remote preference", options=["any", "remote", "hybrid", "onsite"], index=0)
+    role_targets = st.text_input("Role targets", value=", ".join(DEFAULT_ROLE_TARGETS))
+    industries = st.text_input("Industries", value=", ".join(DEFAULT_INDUSTRIES))
+    seniority = st.multiselect(
+        "Seniority",
+        options=["junior", "mid_level", "senior", "staff", "executive"],
+        default=list(DEFAULT_SENIORITY),
+    )
+
+    prefs = CandidatePreferences(
+        locations=_split_csv(locations),
+        remote_preference=None if remote_preference == "any" else remote_preference,
+        role_targets=_split_csv(role_targets),
+        industries=_split_csv(industries),
+        seniority_preference=seniority,
+    )
+
+    create_col1, create_col2 = st.columns(2)
+    with create_col1:
+        if st.button("Create/Update candidate (no LLM)"):
+            if not friendly_name.strip():
+                st.error("Candidate friendly name is required.")
+            else:
+                resolved_candidate_id = active_candidate_id or str(uuid4())
+                _save_candidate_shell(resolved_candidate_id, resume_text or "", prefs)
+                _set_candidate_friendly_name(resolved_candidate_id, friendly_name)
+                st.success(f"Candidate saved: {friendly_name.strip()}")
+                if candidate_mode == "Create new candidate":
+                    st.session_state.new_candidate_friendly_name = _generate_friendly_name()
+                st.rerun()
+    with create_col2:
+        if st.button("Generate candidate profile with OpenAI"):
+            if not resume_text.strip():
+                st.error("Resume text is required for LLM profile generation.")
+            elif not friendly_name.strip():
+                st.error("Candidate friendly name is required.")
+            else:
+                try:
+                    resolved_candidate_id = active_candidate_id or str(uuid4())
+                    request = CandidateProfileRequest(
+                        candidate_id=resolved_candidate_id,
+                        resume_text=resume_text,
+                        preferences=prefs,
+                    )
+                    envelope, _, _ = generate_candidate_profile(request)
+                    _set_candidate_friendly_name(resolved_candidate_id, friendly_name)
+                    st.success("Candidate profile generated and saved.")
+                    st.json(json.loads(envelope.model_dump_json()))
+                    if candidate_mode == "Create new candidate":
+                        st.session_state.new_candidate_friendly_name = _generate_friendly_name()
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Profile generation failed: {exc}")
+
+    st.subheader("4) Run Now + Daily Scheduling")
+    st.code(f"python -m app run --profile {active_profile}")
+    st.code(f"python -m app daily --profile {active_profile}")
+    st.markdown("Windows Task Scheduler: create a daily task that runs `python -m app daily --profile <profile>`." )
+    st.markdown("macOS/Linux cron: add `0 8 * * * cd <repo> && python -m app daily --profile <profile>`." )
+
+with run_tab:
+    st.subheader("Run Pipeline")
+    candidate_display_map = _load_candidate_display_map()
+    candidate_options = list(candidate_display_map.keys())
+    if not candidate_options:
+        st.info("No candidates found. Create one in Setup Wizard first.")
+    else:
+        profile_candidate = str(profile_config.get("candidate_id", "")).strip()
+        reverse_map = {value: key for key, value in candidate_display_map.items()}
+        default_label = reverse_map.get(profile_candidate, candidate_options[0])
+        selected_candidate_label = st.selectbox(
+            "Candidate",
+            options=candidate_options,
+            index=candidate_options.index(default_label) if default_label in candidate_options else 0,
+            key="run_candidate_select",
+        )
+        selected_candidate = candidate_display_map[selected_candidate_label]
+        st.caption("Candidate IDs are hidden in the UI. The selected friendly name maps to an internal candidate ID.")
+        limit_override = st.number_input(
+            "limit_to_score override",
+            min_value=1,
+            value=int(profile_config.get("limit_to_score", 50)),
+        )
+
+        if st.button("Run now"):
+            try:
+                result = run_pipeline_command(
+                    command_name="run",
+                    profile_name=active_profile,
+                    candidate_id=selected_candidate.strip() or None,
+                    limit_to_score=int(limit_override),
+                )
+                st.session_state.last_run_result = result
+                st.success("Pipeline run completed.")
+                st.json(result)
+            except Exception as exc:
+                st.error(f"Pipeline failed: {exc}")
+
+    if st.session_state.last_run_result:
+        st.caption(f"Last log file: {st.session_state.last_run_result.get('log_file')}")
+
+with review_tab:
+    st.subheader("Review Opportunities")
+    review_display_map = _load_candidate_display_map()
+    review_options = list(review_display_map.keys())
+    if not review_options:
+        st.info("No candidates found yet. Create one in Setup Wizard.")
+    else:
+        review_candidate_label = st.selectbox(
+            "Candidate",
+            options=review_options,
+            key="review_candidate_select",
+        )
+        review_candidate = review_display_map[review_candidate_label]
+        opportunities = _load_opportunities(review_candidate)
+        if not opportunities:
+            st.info("No opportunities yet for this candidate.")
+        else:
+            opportunities.sort(key=lambda item: (_state_rank(item.state), -(item.fit_score or -1)))
+            job_ids = [item.job_id for item in opportunities]
+            jobs = _load_jobs(job_ids)
+            evaluations = _latest_fit_evaluations(review_candidate, job_ids)
+
+            for opp in opportunities:
+                job = jobs.get(opp.job_id)
+                title = job.job_title if job else "Unknown role"
+                company = job.company if job else "Unknown company"
+                st.markdown(f"### {company} - {title}")
+                st.write(f"State: {opp.state} | Score: {opp.fit_score} | Bucket: {opp.screen_bucket}")
                 if job:
                     st.write(f"Location: {job.location or 'N/A'}")
                     st.write(f"URL: {job.canonical_url or job.url or 'N/A'}")
-                if opp.skip_reason:
-                    st.write(f"Close reason: {opp.skip_reason}")
-                st.write(f"Score: {opp.fit_score}")
-                st.write(f"Decision: {opp.fit_decision}")
-                st.write(f"Bucket: {opp.screen_bucket}")
-
+                evaluation = evaluations.get(opp.job_id)
                 if evaluation:
                     try:
-                        top_reasons = json.loads(evaluation.top_reasons_json)
-                    except json.JSONDecodeError:
-                        top_reasons = []
-                    if top_reasons:
-                        st.write("Top reasons:")
-                        st.write(", ".join(top_reasons))
+                        reasons = json.loads(evaluation.top_reasons_json)
+                    except Exception:
+                        reasons = []
+                    if reasons:
+                        st.write("Top reasons: " + ", ".join(reasons))
 
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     if st.button("Approve", key=f"approve_{opp.id}"):
                         orchestrator_state.approve(opp.id)
-                        st.success("Approved.")
                         st.rerun()
                 with col2:
-                    close_reason = st.text_input(
-                        "Close reason (optional)",
-                        value="",
-                        key=f"close_reason_{opp.id}",
-                    )
                     if st.button("Close", key=f"close_{opp.id}"):
-                        orchestrator_state.close(opp.id, reason=close_reason.strip() or None)
-                        st.success("Closed.")
+                        orchestrator_state.close(opp.id)
                         st.rerun()
                 with col3:
                     if st.button("Mark Applied", key=f"applied_{opp.id}"):
                         orchestrator_state.mark_applied(opp.id)
-                        st.success("Marked applied.")
                         st.rerun()
