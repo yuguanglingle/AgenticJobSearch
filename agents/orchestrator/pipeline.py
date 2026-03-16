@@ -11,10 +11,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent
 AGENTS_DIR = BASE_DIR.parent
 if str(AGENTS_DIR) not in sys.path:
     sys.path.insert(0, str(AGENTS_DIR))
+
+load_dotenv(BASE_DIR / ".env")
+load_dotenv(AGENTS_DIR / ".env")
 
 from sqlmodel import Session, select
 

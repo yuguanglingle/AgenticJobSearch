@@ -3,6 +3,13 @@
 import os
 from typing import Any, Dict, Optional
 from openai import OpenAI
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Load environment variables from .env files
+BASE_DIR = Path(__file__).resolve().parent.parent.parent  # agents
+load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / "candidate_profile" / ".env")
 
 
 class LLMClient:

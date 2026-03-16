@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,24 @@ from orchestrator.theirstack_overrides import (
 st.set_page_config(page_title="Agentic Job Search", layout="wide")
 st.title("Agentic Job Search")
 st.caption("Setup wizard + local pipeline runner")
+st.markdown(
+    """
+    <style>
+    div[data-baseweb="tab-list"] button,
+    button[data-baseweb="tab"],
+    button[role="tab"] {
+        font-size: 1.15rem !important;
+        font-weight: 600 !important;
+        min-height: 3rem !important;
+        padding: 0.6rem 1rem !important;
+    }
+    div[data-baseweb="tab-list"] {
+        gap: 0.65rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 def _split_csv(value: str) -> list[str]:
@@ -109,8 +128,45 @@ def _save_candidate_shell(candidate_id: str, resume_text: str, prefs: CandidateP
     )
 
 
-def _load_candidates() -> list[str]:
-    return [candidate.id for candidate in candidate_db.list_candidates()]
+def _generate_friendly_name() -> str:
+    adjectives = ["Focused", "Curious", "Pragmatic", "Bold", "Strategic", "Steady", "Driven"]
+    nouns = ["Builder", "Analyst", "Operator", "Engineer", "Planner", "Scout", "Creator"]
+    return f"{random.choice(adjectives)} {random.choice(nouns)}"
+
+
+def _load_candidate_display_map() -> dict[str, str]:
+    try:
+        candidates = candidate_db.list_candidates()
+    except Exception as exc:
+        st.error(f"Failed to load candidates: {exc}")
+        return {}
+    if not candidates:
+        return {}
+    used: dict[str, int] = {}
+    display_to_id: dict[str, str] = {}
+    for index, candidate in enumerate(candidates, start=1):
+        base = (candidate.name or "").strip() or f"Candidate {index}"
+        used[base] = used.get(base, 0) + 1
+        suffix = used[base]
+        display_name = base if suffix == 1 else f"{base} ({suffix})"
+        display_to_id[display_name] = candidate.id
+    return display_to_id
+
+
+def _set_candidate_friendly_name(candidate_id: str, friendly_name: str) -> None:
+    try:
+        db_path = candidate_db.get_db_path()
+        engine = candidate_db.init_db(db_path)
+        with Session(engine) as session:
+            candidate = session.get(candidate_db.Candidate, candidate_id)
+            if not candidate:
+                return
+            candidate.name = friendly_name.strip() or None
+            candidate.updated_at = _now_iso()
+            session.add(candidate)
+            session.commit()
+    except Exception as exc:
+        st.error(f"Failed to save candidate name: {exc}")
 
 
 def _save_keys_to_env(openai_key: str, theirstack_key: str) -> None:
@@ -230,9 +286,25 @@ setup_tab, run_tab, review_tab = st.tabs(["Setup Wizard", "Run Pipeline", "Revie
 
 with setup_tab:
     st.subheader("1) Create Profile")
+    profile_candidate_map = _load_candidate_display_map()
+    profile_candidate_options = ["(none)"] + list(profile_candidate_map.keys())
+    profile_candidate_id_current = str(profile_config.get("candidate_id", "")).strip()
+    profile_candidate_reverse = {value: key for key, value in profile_candidate_map.items()}
+    default_candidate_label = profile_candidate_reverse.get(profile_candidate_id_current, "(none)")
+    default_candidate_index = (
+        profile_candidate_options.index(default_candidate_label)
+        if default_candidate_label in profile_candidate_options
+        else 0
+    )
     with st.form("profile_form"):
         profile_name = st.text_input("Profile name", value=active_profile)
-        candidate_id_for_profile = st.text_input("Default candidate id (optional)", value=str(profile_config.get("candidate_id", "")))
+        default_candidate_label = st.selectbox(
+            "Default candidate",
+            options=profile_candidate_options,
+            index=default_candidate_index,
+            help="Friendly names are shown here. IDs are stored internally.",
+            key="setup_default_candidate_select",
+        )
         limit_to_score = st.number_input(
             "Default limit_to_score",
             min_value=1,
@@ -260,6 +332,11 @@ with setup_tab:
         else:
             try:
                 provider_config = json.loads(provider_json)
+                candidate_id_for_profile = (
+                    profile_candidate_map.get(default_candidate_label, "")
+                    if default_candidate_label != "(none)"
+                    else ""
+                )
                 new_config = {
                     "candidate_id": candidate_id_for_profile.strip(),
                     "limit_to_score": int(limit_to_score),
@@ -307,12 +384,48 @@ with setup_tab:
                 st.error(message)
 
     st.subheader("3) Create Candidate")
-    candidate_options = _load_candidates()
-    existing_candidate = st.selectbox("Existing candidate", options=["(new)"] + candidate_options)
-    candidate_id = str(uuid4()) if existing_candidate == "(new)" else existing_candidate
-    candidate_id = st.text_input("Candidate id", value=candidate_id)
+    st.caption(
+        "Each candidate is tied to a resume and preferences. One person can keep multiple candidates "
+        "(for example different resume versions)."
+    )
+    candidate_display_map = _load_candidate_display_map()
+    candidate_display_options = list(candidate_display_map.keys())
+    candidate_mode = st.radio(
+        "Candidate mode",
+        options=["Create new candidate", "Update existing candidate"],
+        horizontal=True,
+    )
+    if "new_candidate_friendly_name" not in st.session_state:
+        st.session_state.new_candidate_friendly_name = _generate_friendly_name()
 
-    resume_text = st.text_area("Resume text", height=220, value="")
+    active_candidate_id: Optional[str] = None
+    friendly_name_default = st.session_state.new_candidate_friendly_name
+    resume_default = ""
+    if candidate_mode == "Update existing candidate":
+        if not candidate_display_options:
+            st.info("No candidates available yet. Switch to 'Create new candidate' first.")
+        else:
+            selected_candidate_display = st.selectbox(
+                "Candidate",
+                options=candidate_display_options,
+                key="setup_existing_candidate_select",
+            )
+            active_candidate_id = candidate_display_map[selected_candidate_display]
+            try:
+                existing_candidate = candidate_db.get_candidate(active_candidate_id)
+            except Exception as exc:
+                existing_candidate = None
+                st.error(f"Failed to load candidate: {exc}")
+            if existing_candidate:
+                friendly_name_default = (existing_candidate.name or "").strip() or selected_candidate_display
+                resume_default = existing_candidate.resume_raw or ""
+
+    friendly_name = st.text_input(
+        "Candidate friendly name",
+        value=friendly_name_default,
+        help="Use a memorable label like 'Data Resume v2' or 'Backend Focus'.",
+    )
+    resume_text = st.text_area("Resume text", height=220, value=resume_default)
     locations = st.text_input("Locations (comma separated)", value=", ".join(DEFAULT_LOCATION_PATTERNS))
     remote_preference = st.selectbox("Remote preference", options=["any", "remote", "hybrid", "onsite"], index=0)
     role_targets = st.text_input("Role targets", value=", ".join(DEFAULT_ROLE_TARGETS))
@@ -334,27 +447,37 @@ with setup_tab:
     create_col1, create_col2 = st.columns(2)
     with create_col1:
         if st.button("Create/Update candidate (no LLM)"):
-            if not candidate_id.strip():
-                st.error("Candidate id is required.")
+            if not friendly_name.strip():
+                st.error("Candidate friendly name is required.")
             else:
-                _save_candidate_shell(candidate_id.strip(), resume_text or "", prefs)
-                st.success(f"Candidate saved: {candidate_id.strip()}")
+                resolved_candidate_id = active_candidate_id or str(uuid4())
+                _save_candidate_shell(resolved_candidate_id, resume_text or "", prefs)
+                _set_candidate_friendly_name(resolved_candidate_id, friendly_name)
+                st.success(f"Candidate saved: {friendly_name.strip()}")
+                if candidate_mode == "Create new candidate":
+                    st.session_state.new_candidate_friendly_name = _generate_friendly_name()
+                st.rerun()
     with create_col2:
         if st.button("Generate candidate profile with OpenAI"):
             if not resume_text.strip():
                 st.error("Resume text is required for LLM profile generation.")
-            elif not candidate_id.strip():
-                st.error("Candidate id is required.")
+            elif not friendly_name.strip():
+                st.error("Candidate friendly name is required.")
             else:
                 try:
+                    resolved_candidate_id = active_candidate_id or str(uuid4())
                     request = CandidateProfileRequest(
-                        candidate_id=candidate_id.strip(),
+                        candidate_id=resolved_candidate_id,
                         resume_text=resume_text,
                         preferences=prefs,
                     )
                     envelope, _, _ = generate_candidate_profile(request)
+                    _set_candidate_friendly_name(resolved_candidate_id, friendly_name)
                     st.success("Candidate profile generated and saved.")
                     st.json(json.loads(envelope.model_dump_json()))
+                    if candidate_mode == "Create new candidate":
+                        st.session_state.new_candidate_friendly_name = _generate_friendly_name()
+                    st.rerun()
                 except Exception as exc:
                     st.error(f"Profile generation failed: {exc}")
 
@@ -366,40 +489,58 @@ with setup_tab:
 
 with run_tab:
     st.subheader("Run Pipeline")
-    candidate_options = _load_candidates()
-    profile_candidate = str(profile_config.get("candidate_id", "")).strip()
-    default_candidate = profile_candidate if profile_candidate else (candidate_options[0] if candidate_options else "")
-    selected_candidate = st.text_input("Candidate id", value=default_candidate)
-    limit_override = st.number_input(
-        "limit_to_score override",
-        min_value=1,
-        value=int(profile_config.get("limit_to_score", 50)),
-    )
+    candidate_display_map = _load_candidate_display_map()
+    candidate_options = list(candidate_display_map.keys())
+    if not candidate_options:
+        st.info("No candidates found. Create one in Setup Wizard first.")
+    else:
+        profile_candidate = str(profile_config.get("candidate_id", "")).strip()
+        reverse_map = {value: key for key, value in candidate_display_map.items()}
+        default_label = reverse_map.get(profile_candidate, candidate_options[0])
+        selected_candidate_label = st.selectbox(
+            "Candidate",
+            options=candidate_options,
+            index=candidate_options.index(default_label) if default_label in candidate_options else 0,
+            key="run_candidate_select",
+        )
+        selected_candidate = candidate_display_map[selected_candidate_label]
+        st.caption("Candidate IDs are hidden in the UI. The selected friendly name maps to an internal candidate ID.")
+        limit_override = st.number_input(
+            "limit_to_score override",
+            min_value=1,
+            value=int(profile_config.get("limit_to_score", 50)),
+        )
 
-    if st.button("Run now"):
-        try:
-            result = run_pipeline_command(
-                command_name="run",
-                profile_name=active_profile,
-                candidate_id=selected_candidate.strip() or None,
-                limit_to_score=int(limit_override),
-            )
-            st.session_state.last_run_result = result
-            st.success("Pipeline run completed.")
-            st.json(result)
-        except Exception as exc:
-            st.error(f"Pipeline failed: {exc}")
+        if st.button("Run now"):
+            try:
+                result = run_pipeline_command(
+                    command_name="run",
+                    profile_name=active_profile,
+                    candidate_id=selected_candidate.strip() or None,
+                    limit_to_score=int(limit_override),
+                )
+                st.session_state.last_run_result = result
+                st.success("Pipeline run completed.")
+                st.json(result)
+            except Exception as exc:
+                st.error(f"Pipeline failed: {exc}")
 
     if st.session_state.last_run_result:
         st.caption(f"Last log file: {st.session_state.last_run_result.get('log_file')}")
 
 with review_tab:
     st.subheader("Review Opportunities")
-    review_candidates = _load_candidates()
-    if not review_candidates:
+    review_display_map = _load_candidate_display_map()
+    review_options = list(review_display_map.keys())
+    if not review_options:
         st.info("No candidates found yet. Create one in Setup Wizard.")
     else:
-        review_candidate = st.selectbox("Candidate", options=review_candidates)
+        review_candidate_label = st.selectbox(
+            "Candidate",
+            options=review_options,
+            key="review_candidate_select",
+        )
+        review_candidate = review_display_map[review_candidate_label]
         opportunities = _load_opportunities(review_candidate)
         if not opportunities:
             st.info("No opportunities yet for this candidate.")
