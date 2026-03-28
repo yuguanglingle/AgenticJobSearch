@@ -2,6 +2,21 @@
 
 A local-first agentic job search assistant that automates job discovery, deduplication, LLM-based fit screening, and review workflow tracking.
 
+## LLM Fit Evaluation
+
+The core power of `AIPersonalJobSearch` is not just collecting jobs, but screening them with an LLM against a real candidate profile and stated preferences. This saves applicants time by highlighting relevant jobs, filtering out poor-fit roles before they require a full read, and providing a structured workflow to review each opportunity and act with Approve or Close.
+
+For each promising role, the system can:
+
+- score how well the job fits the candidate on a `1-100` scale
+- explain why the role is a good fit
+- explain why the role may not be worth pursuing
+- persist that reasoning so the user can review, approve, close, or apply with context
+
+This makes the project more than a scraper or tracker. It is a decision-support workflow where the LLM produces direct, reviewable reasoning for each screened job.
+
+![Review Jobs tab](docs/screenshots/LLM Fit Evaluation.png)
+
 ## Why I built this
 
 Job search is repetitive operational work: searching across sources, filtering noise, re-reading similar roles, and manually tracking what has already been reviewed or applied to. I built `AIPersonalJobSearch` to turn that workflow into a reproducible local pipeline with persistent state.
@@ -15,7 +30,7 @@ This project combines a real retrieval pipeline, deterministic heuristics, optio
 - Provider-based job retrieval, currently implemented for TheirStack.
 - Deduplication using strong keys, normalized canonical URLs, and soft keys plus description hashes.
 - Heuristic pre-ranking before LLM screening to reduce unnecessary model calls.
-- **LLM fit evaluation** Checking candidate profile as well as candidate's preferences to see how fit a job is for the candidate on a scale of 1 to 100. Generate reason to apply and reason to skip field for explainability.
+- **LLM fit evaluation** Score jobs against the candidate profile and preferences on a `1-100` scale, with explicit reasons to apply and reasons to skip for explainability.
 - Review workflow UI that tracks jobs through `DISCOVERED -> SCREENED -> APPROVED -> APPLIED -> CLOSED`.
 - Profile-based configuration for multiple candidates, databases, logs, and provider payload overrides.
 - CLI and `Makefile` entrypoints for reproducible local runs.
@@ -73,7 +88,7 @@ Pipeline execution:
 
 Review workflow with status and date tracking:
 
-![Review Jobs tab](docs/screenshots/review-jobs.png)
+![LLM Fit Evaluation](docs/screenshots/LLM%20Fit%20Evaluation.png)
 
 ## Architecture
 
