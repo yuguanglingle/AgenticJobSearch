@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +23,15 @@ from job_match import db as job_match_db
 from job_match.state_machine import JobState
 from job_search import db as job_search_db
 from orchestrator import state as orchestrator_state
+from orchestrator.review_ui import (
+    DATE_FIELD_LABELS,
+    PRIMARY_STATUS_METRICS,
+    build_review_items,
+    filter_review_items,
+    group_items_by_date,
+    group_items_by_state,
+    summarize_states,
+)
 
 load_dotenv(BASE_DIR / ".env")
 load_dotenv(AGENTS_DIR / ".env")
@@ -91,61 +101,26 @@ def _state_rank(state: str) -> int:
 
 def _status_color(state: Optional[str]) -> str:
     if state == JobState.APPROVED.value:
-        return "#2B6CB0"  # blue
+        return "#2B6CB0"
     if state == JobState.APPLIED.value:
-        return "#2F855A"  # green
+        return "#2F855A"
     if state == JobState.CLOSED.value:
-        return "#D69E2E"  # yellow
-    return "#718096"  # gray
+        return "#D69E2E"
+    return "#718096"
 
 
-st.header("Candidate Profile")
-st.caption("A single user can manage multiple candidate profiles.")
-candidate_options = _load_candidates()
-selected = st.selectbox("Candidate Profile", options=["(select)"] + candidate_options)
+def _render_status_metrics(opportunities: list[job_match_db.JobOpportunity]) -> None:
+    counts = summarize_states(opportunities)
+    metric_columns = st.columns(len(PRIMARY_STATUS_METRICS) + 1)
+    for index, state in enumerate(PRIMARY_STATUS_METRICS):
+        metric_columns[index].metric(state.title(), counts.get(state, 0))
+    metric_columns[-1].metric("Total", len(opportunities))
 
-if selected == "(select)":
-    st.info("Select a candidate profile to review opportunities.")
-    st.stop()
 
-state_filter = st.multiselect(
-    "States",
-    options=[
-        JobState.DISCOVERED.value,
-        JobState.SCREENED.value,
-        JobState.APPROVED.value,
-        JobState.APPLIED.value,
-        JobState.CLOSED.value,
-    ],
-    default=[
-        JobState.SCREENED.value,
-        JobState.APPROVED.value,
-        JobState.APPLIED.value,
-        JobState.DISCOVERED.value,
-        JobState.CLOSED.value,
-    ],
-)
-
-opps = _load_opportunities(selected, state_filter)
-if not opps:
-    st.info("No opportunities found for this candidate profile.")
-    st.stop()
-
-counts = {}
-for opp in opps:
-    counts[opp.state] = counts.get(opp.state, 0) + 1
-st.caption(
-    "Counts: " + ", ".join(f"{state}={count}" for state, count in sorted(counts.items()))
-)
-
-opps.sort(key=lambda opp: (_state_rank(opp.state), -(opp.fit_score or -1)))
-job_ids = [opp.job_id for opp in opps]
-jobs = _load_jobs(job_ids)
-evaluations = _latest_fit_evaluations(selected, job_ids)
-
-for opp in opps:
-    job = jobs.get(opp.job_id)
-    evaluation = evaluations.get(opp.job_id)
+def _render_opportunity_card(item, *, key_prefix: str) -> None:
+    opp = item.opportunity
+    job = item.job
+    evaluation = item.evaluation
     title = job.job_title if job else "Unknown role"
     company = job.company if job else "Unknown company"
     header = f"{company} - {title}"
@@ -154,13 +129,14 @@ for opp in opps:
         f"<div style='background-color:{color};"
         "color:white;padding:10px 12px;border-radius:8px;"
         "margin:8px 0 6px 0;font-weight:600;'>"
-        f"{header} — Status: {opp.state}</div>",
+        f"{header} | Status: {opp.state}</div>",
         unsafe_allow_html=True,
     )
     with st.expander(header, expanded=False):
         st.write(f"Score: {opp.fit_score}")
         st.write(f"Decision: {opp.fit_decision}")
         st.write(f"Bucket: {opp.screen_bucket}")
+        st.write(f"{item.selected_date_label}: {item.selected_date_text}")
         if opp.skip_reason:
             st.write(f"Close reason: {opp.skip_reason}")
         if job:
@@ -179,7 +155,7 @@ for opp in opps:
         col1, col2, col3 = st.columns(3)
         with col1:
             if opp.state == JobState.SCREENED.value:
-                if st.button("Approve", key=f"approve_{opp.id}"):
+                if st.button("Approve", key=f"{key_prefix}_approve_{opp.id}"):
                     orchestrator_state.approve(opp.id)
                     st.success("Approved.")
                     st.rerun()
@@ -187,16 +163,102 @@ for opp in opps:
             close_reason = st.text_input(
                 "Close reason (optional)",
                 value="",
-                key=f"close_reason_{opp.id}",
+                key=f"{key_prefix}_close_reason_{opp.id}",
             )
             if opp.state != JobState.CLOSED.value:
-                if st.button("Close", key=f"close_{opp.id}"):
+                if st.button("Close", key=f"{key_prefix}_close_{opp.id}"):
                     orchestrator_state.close(opp.id, reason=close_reason.strip() or None)
                     st.success("Closed.")
                     st.rerun()
         with col3:
             if opp.state == JobState.APPROVED.value:
-                if st.button("Mark Applied", key=f"applied_{opp.id}"):
+                if st.button("Mark Applied", key=f"{key_prefix}_applied_{opp.id}"):
                     orchestrator_state.mark_applied(opp.id)
                     st.success("Marked applied.")
                     st.rerun()
+
+
+st.header("Candidate Profile")
+st.caption("A single user can manage multiple candidate profiles.")
+candidate_options = _load_candidates()
+selected = st.selectbox("Candidate Profile", options=["(select)"] + candidate_options)
+
+if selected == "(select)":
+    st.info("Select a candidate profile to review opportunities.")
+    st.stop()
+
+all_states = [
+    JobState.DISCOVERED.value,
+    JobState.SCREENED.value,
+    JobState.APPROVED.value,
+    JobState.APPLIED.value,
+    JobState.CLOSED.value,
+]
+
+opps = _load_opportunities(selected, all_states)
+if not opps:
+    st.info("No opportunities found for this candidate profile.")
+    st.stop()
+
+opps.sort(key=lambda opp: (_state_rank(opp.state), -(opp.fit_score or -1)))
+job_ids = [opp.job_id for opp in opps]
+jobs = _load_jobs(job_ids)
+evaluations = _latest_fit_evaluations(selected, job_ids)
+
+_render_status_metrics(opps)
+
+filter_col1, filter_col2, filter_col3 = st.columns([1.4, 1, 1])
+with filter_col1:
+    state_filter = st.multiselect("Status filter", options=all_states, default=all_states)
+with filter_col2:
+    date_field = st.selectbox(
+        "Track jobs by date",
+        options=list(DATE_FIELD_LABELS.keys()),
+        format_func=lambda key: DATE_FIELD_LABELS[key],
+        index=0,
+    )
+
+review_items = build_review_items(opps, jobs, evaluations, date_field)
+known_dates = sorted({item.selected_date_value for item in review_items if item.selected_date_value is not None})
+default_start = known_dates[0] if known_dates else None
+default_end = known_dates[-1] if known_dates else None
+with filter_col3:
+    start_date = st.date_input("From date", value=default_start) if default_start else None
+end_date = st.date_input("To date", value=default_end) if default_end else None
+
+filtered_items = filter_review_items(
+    review_items,
+    selected_states=state_filter,
+    start_date=start_date if isinstance(start_date, date) else None,
+    end_date=end_date if isinstance(end_date, date) else None,
+)
+st.caption(
+    f"Showing {len(filtered_items)} of {len(opps)} opportunities by {DATE_FIELD_LABELS[date_field].lower()}."
+)
+if not filtered_items:
+    st.info("No opportunities match the current filters.")
+    st.stop()
+
+status_tab, date_tab = st.tabs(["By Status", "By Date"])
+with status_tab:
+    grouped_by_state = group_items_by_state(filtered_items)
+    for state in all_states:
+        items = grouped_by_state.get(state, [])
+        if not items:
+            continue
+        st.markdown(f"### {state} ({len(items)})")
+        for item in items:
+            _render_opportunity_card(item, key_prefix=f"status_{state.lower()}")
+
+with date_tab:
+    grouped_by_date = group_items_by_date(filtered_items)
+    sortable_dates = sorted(
+        grouped_by_date.keys(),
+        key=lambda value: (value == "Unknown", value),
+        reverse=True,
+    )
+    for date_key in sortable_dates:
+        items = grouped_by_date[date_key]
+        st.markdown(f"### {DATE_FIELD_LABELS[date_field]}: {date_key} ({len(items)})")
+        for item in items:
+            _render_opportunity_card(item, key_prefix=f"date_{date_key}")

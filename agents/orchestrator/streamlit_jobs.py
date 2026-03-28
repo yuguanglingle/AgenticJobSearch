@@ -6,7 +6,7 @@ import json
 import os
 import random
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -46,6 +46,15 @@ from orchestrator.profile_config import (
     resolve_logs_dir,
     save_profile_config,
     set_default_profile,
+)
+from orchestrator.review_ui import (
+    DATE_FIELD_LABELS,
+    PRIMARY_STATUS_METRICS,
+    build_review_items,
+    filter_review_items,
+    group_items_by_date,
+    group_items_by_state,
+    summarize_states,
 )
 from orchestrator.theirstack_overrides import (
     DEFAULT_INDUSTRIES,
@@ -249,6 +258,57 @@ def _state_rank(value: Optional[str]) -> int:
         JobState.CLOSED.value: 4,
     }
     return order.get(value or "", 99)
+
+
+def _render_status_metrics(opportunities: list[job_match_db.JobOpportunity]) -> None:
+    counts = summarize_states(opportunities)
+    metric_columns = st.columns(len(PRIMARY_STATUS_METRICS) + 1)
+    for index, state in enumerate(PRIMARY_STATUS_METRICS):
+        metric_columns[index].metric(state.title(), counts.get(state, 0))
+    metric_columns[-1].metric("Total", len(opportunities))
+
+
+def _render_opportunity_card(item, *, key_prefix: str) -> None:
+    opp = item.opportunity
+    job = item.job
+    evaluation = item.evaluation
+    title = job.job_title if job else "Unknown role"
+    company = job.company if job else "Unknown company"
+    header = f"{company} - {title}"
+    with st.expander(header, expanded=False):
+        st.write(
+            f"State: {opp.state} | Score: {opp.fit_score} | Bucket: {opp.screen_bucket or 'N/A'}"
+        )
+        st.write(f"{item.selected_date_label}: {item.selected_date_text}")
+        if getattr(opp, "skip_reason", None):
+            st.write(f"Close reason: {opp.skip_reason}")
+        if job:
+            st.write(f"Location: {job.location or 'N/A'}")
+            st.write(f"URL: {job.canonical_url or job.url or 'N/A'}")
+        if evaluation:
+            try:
+                reasons = json.loads(evaluation.top_reasons_json)
+            except Exception:
+                reasons = []
+            if reasons:
+                st.write("Top reasons: " + ", ".join(reasons))
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if opp.state == JobState.SCREENED.value:
+                if st.button("Approve", key=f"{key_prefix}_approve_{opp.id}"):
+                    orchestrator_state.approve(opp.id)
+                    st.rerun()
+        with col2:
+            if opp.state != JobState.CLOSED.value:
+                if st.button("Close", key=f"{key_prefix}_close_{opp.id}"):
+                    orchestrator_state.close(opp.id)
+                    st.rerun()
+        with col3:
+            if opp.state == JobState.APPROVED.value:
+                if st.button("Mark Applied", key=f"{key_prefix}_applied_{opp.id}"):
+                    orchestrator_state.mark_applied(opp.id)
+                    st.rerun()
 
 
 profiles = list_profiles()
@@ -549,35 +609,81 @@ with review_tab:
             job_ids = [item.job_id for item in opportunities]
             jobs = _load_jobs(job_ids)
             evaluations = _latest_fit_evaluations(review_candidate, job_ids)
+            _render_status_metrics(opportunities)
 
-            for opp in opportunities:
-                job = jobs.get(opp.job_id)
-                title = job.job_title if job else "Unknown role"
-                company = job.company if job else "Unknown company"
-                st.markdown(f"### {company} - {title}")
-                st.write(f"State: {opp.state} | Score: {opp.fit_score} | Bucket: {opp.screen_bucket}")
-                if job:
-                    st.write(f"Location: {job.location or 'N/A'}")
-                    st.write(f"URL: {job.canonical_url or job.url or 'N/A'}")
-                evaluation = evaluations.get(opp.job_id)
-                if evaluation:
-                    try:
-                        reasons = json.loads(evaluation.top_reasons_json)
-                    except Exception:
-                        reasons = []
-                    if reasons:
-                        st.write("Top reasons: " + ", ".join(reasons))
+            all_states = [
+                JobState.DISCOVERED.value,
+                JobState.SCREENED.value,
+                JobState.APPROVED.value,
+                JobState.APPLIED.value,
+                JobState.CLOSED.value,
+            ]
+            filter_col1, filter_col2, filter_col3 = st.columns([1.4, 1, 1])
+            with filter_col1:
+                state_filter = st.multiselect(
+                    "Status filter",
+                    options=all_states,
+                    default=all_states,
+                    key="review_status_filter",
+                )
+            with filter_col2:
+                date_field = st.selectbox(
+                    "Track jobs by date",
+                    options=list(DATE_FIELD_LABELS.keys()),
+                    format_func=lambda key: DATE_FIELD_LABELS[key],
+                    index=0,
+                    key="review_date_field",
+                )
+            review_items = build_review_items(opportunities, jobs, evaluations, date_field)
+            known_dates = sorted(
+                {item.selected_date_value for item in review_items if item.selected_date_value is not None}
+            )
+            default_start = known_dates[0] if known_dates else None
+            default_end = known_dates[-1] if known_dates else None
+            with filter_col3:
+                start_date = st.date_input(
+                    "From date",
+                    value=default_start,
+                    key="review_start_date",
+                ) if default_start else None
+            end_date = st.date_input(
+                "To date",
+                value=default_end,
+                key="review_end_date",
+            ) if default_end else None
 
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.button("Approve", key=f"approve_{opp.id}"):
-                        orchestrator_state.approve(opp.id)
-                        st.rerun()
-                with col2:
-                    if st.button("Close", key=f"close_{opp.id}"):
-                        orchestrator_state.close(opp.id)
-                        st.rerun()
-                with col3:
-                    if st.button("Mark Applied", key=f"applied_{opp.id}"):
-                        orchestrator_state.mark_applied(opp.id)
-                        st.rerun()
+            filtered_items = filter_review_items(
+                review_items,
+                selected_states=state_filter,
+                start_date=start_date if isinstance(start_date, date) else None,
+                end_date=end_date if isinstance(end_date, date) else None,
+            )
+            st.caption(
+                f"Showing {len(filtered_items)} of {len(opportunities)} opportunities by "
+                f"{DATE_FIELD_LABELS[date_field].lower()}."
+            )
+            if not filtered_items:
+                st.info("No opportunities match the current filters.")
+            else:
+                status_tab, date_tab = st.tabs(["By Status", "By Date"])
+                with status_tab:
+                    grouped_by_state = group_items_by_state(filtered_items)
+                    for state in all_states:
+                        items = grouped_by_state.get(state, [])
+                        if not items:
+                            continue
+                        st.markdown(f"### {state} ({len(items)})")
+                        for item in items:
+                            _render_opportunity_card(item, key_prefix=f"status_{state.lower()}")
+                with date_tab:
+                    grouped_by_date = group_items_by_date(filtered_items)
+                    sortable_dates = sorted(
+                        grouped_by_date.keys(),
+                        key=lambda value: (value == "Unknown", value),
+                        reverse=True,
+                    )
+                    for date_key in sortable_dates:
+                        items = grouped_by_date[date_key]
+                        st.markdown(f"### {DATE_FIELD_LABELS[date_field]}: {date_key} ({len(items)})")
+                        for item in items:
+                            _render_opportunity_card(item, key_prefix=f"date_{date_key}")
