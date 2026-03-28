@@ -55,6 +55,26 @@ It provides three tabs:
 - `Run Pipeline`: run the retrieval and screening pipeline for a selected candidate.
 - `Review Jobs`: inspect screened jobs and move them through the review state machine.
 
+### UI screenshots
+
+Setup flow overview:
+
+![Setup Wizard - profile setup](docs/screenshots/setup-wizard-profile.png)
+
+![Setup Wizard - API keys](docs/screenshots/setup-wizard-api-keys.png)
+
+![Setup Wizard - candidate creation](docs/screenshots/setup-wizard-candidate.png)
+
+![Setup Wizard - run now and scheduling](docs/screenshots/setup-wizard-scheduling.png)
+
+Pipeline execution:
+
+![Run Pipeline tab](docs/screenshots/run-pipeline.png)
+
+Review workflow with status and date tracking:
+
+![Review Jobs tab](docs/screenshots/review-jobs.png)
+
 ## Architecture
 
 The system is built as a local pipeline around a shared database and a small set of focused modules:
