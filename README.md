@@ -59,21 +59,21 @@ It provides three tabs:
 
 Setup flow overview:
 
-<img src="./docs/screenshots/setup-wizard-profile.png" alt="Setup Wizard - profile setup" width="100%" />
+![Setup Wizard - profile setup](docs/screenshots/setup-wizard-profile.png)
 
-<img src="./docs/screenshots/setup-wizard-api-keys.png" alt="Setup Wizard - API keys" width="100%" />
+![Setup Wizard - API keys](docs/screenshots/setup-wizard-api-keys.png)
 
-<img src="./docs/screenshots/setup-wizard-candidate.png" alt="Setup Wizard - candidate creation" width="100%" />
+![Setup Wizard - candidate creation](docs/screenshots/setup-wizard-candidate.png)
 
-<img src="./docs/screenshots/setup-wizard-scheduling.png" alt="Setup Wizard - run now and scheduling" width="100%" />
+![Setup Wizard - run now and scheduling](docs/screenshots/setup-wizard-scheduling.png)
 
 Pipeline execution:
 
-<img src="./docs/screenshots/run-pipeline.png" alt="Run Pipeline tab" width="100%" />
+![Run Pipeline tab](docs/screenshots/run-pipeline.png)
 
 Review workflow with status and date tracking:
 
-<img src="./docs/screenshots/review-jobs.png" alt="Review Jobs tab" width="100%" />
+![Review Jobs tab](docs/screenshots/review-jobs.png)
 
 ## Architecture
 
