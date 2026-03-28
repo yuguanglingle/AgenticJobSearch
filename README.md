@@ -15,7 +15,7 @@ For each promising role, the system can:
 
 This makes the project more than a scraper or tracker. It is a decision-support workflow where the LLM produces direct, reviewable reasoning for each screened job.
 
-![Review Jobs tab](docs/screenshots/LLM Fit Evaluation.png)
+![Review Jobs tab](docs/screenshots/LLM-Fit-Evaluation.png)
 
 ## Why I built this
 
