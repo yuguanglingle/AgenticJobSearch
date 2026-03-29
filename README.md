@@ -88,7 +88,7 @@ Pipeline execution:
 
 Review workflow with status and date tracking:
 
-![LLM Fit Evaluation](docs/screenshots/LLM%20Fit%20Evaluation.png)
+![LLM Fit Evaluation](docs/screenshots/LLM-Fit-Evaluation.png)
 
 ## Architecture
 
