@@ -2,7 +2,7 @@
 
 A local-first agentic job search assistant that automates job discovery, deduplication, LLM-based fit screening, and review workflow tracking.
 
-## Update: August 20, 2026
+## Update: September 19, 2026
 
 This project is now public. I am making this V1 publicly available for two reasons:
 
