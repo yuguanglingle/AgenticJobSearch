@@ -2,6 +2,17 @@
 
 A local-first agentic job search assistant that automates job discovery, deduplication, LLM-based fit screening, and review workflow tracking.
 
+## Update: August 20, 2026
+
+This project is now public. I am making this V1 publicly available for two reasons:
+
+1. **A new architecture and tech stack are in progress** and will supersede this V1.
+2. **Perplexity AI now covers this product goal.** It does a good surface-level replication of this system, but it lacks observability into how jobs are screened, and its job scans are not complete.
+
+It started as a personal project to solve an actual need for me and my family: automate the job search and make it tailored to my preferences rather than purely keyword-based. In about two months of steering an AI assistant through my design, it came a long way — a working local pipeline that screens real postings against a real profile, with the reasoning kept visible end to end. The scheduled daily runs then ran successfully for five months, until the free-tier job search API credits were used up.
+
+The next step is modernization: I am rebuilding the project with a coding agent driving the work. Stay tuned for the next iteration.
+
 ## LLM Fit Evaluation
 
 The core power of `AIPersonalJobSearch` is not just collecting jobs, but screening them with an LLM against a real candidate profile and stated preferences. This saves applicants time by highlighting relevant jobs, filtering out poor-fit roles before they require a full read, and providing a structured workflow to review each opportunity and act with Approve or Close.
@@ -15,7 +26,7 @@ For each promising role, the system can:
 
 This makes the project more than a scraper or tracker. It is a decision-support workflow where the LLM produces direct, reviewable reasoning for each screened job.
 
-![Review Jobs tab](docs/screenshots/LLM-Fit-Evaluation.png)
+![LLM Fit Evaluation](docs/screenshots/LLM-Fit-Evaluation.png)
 
 ## Why I built this
 
@@ -88,7 +99,7 @@ Pipeline execution:
 
 Review workflow with status and date tracking:
 
-![LLM Fit Evaluation](docs/screenshots/LLM-Fit-Evaluation.png)
+![Review Jobs tab](docs/screenshots/review-jobs.png)
 
 ## Architecture
 
